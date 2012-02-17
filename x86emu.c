@@ -11,22 +11,24 @@
 #include <stdio.h>
 
 
-#define PRINTREG(reg) printf("%s\t0x%x\n", #reg, reg)
+#define PRINTREG(name, val) printf("%s\t0x%x\n", name, val)
 
 #define MAX_CODE_LEN 1024
 
+#define EAX         0x000
+#define ECX         0x001
+#define EDX         0x010
+#define EBX         0x011
+#define ESP         0x100
+#define EBP         0x101
+#define ESI         0x110
+#define EDI         0x111
+
+uint32_t gpr[8]   = {0};
+
 #define BASE_EIP    0x8048354
-
-uint32_t eax      = 0xbf8db144;
-uint32_t ebx      = 0xae5ff4;
-uint32_t ecx      = 0x88c5ffb;
-uint32_t edx      = 0x1;
-
-uint32_t esp      = 0xbf8db0bc;
-uint32_t ebp      = 0xbf8db118;
-uint32_t esi      = 0x9a0ca0;
-uint32_t edi      = 0x0;
 uint32_t eip      = BASE_EIP;
+#define EIP         (eip - BASE_EIP)
 
 uint32_t eflags   = 0x246;
 
@@ -48,26 +50,24 @@ uint32_t gs       = 0x33;
 #define CMP_Eb_Ib   0x80
 #define POP_EBP     0x5d
 
-#define EIP         (eip - BASE_EIP)
-
 inline void print_all_registers()
 {
-    PRINTREG(eax);
-    PRINTREG(ebx);
-    PRINTREG(ecx);
-    PRINTREG(edx);
-    PRINTREG(esp);
-    PRINTREG(ebp);
-    PRINTREG(esi);
-    PRINTREG(edi);
-    PRINTREG(eip);
-    PRINTREG(eflags);
-    PRINTREG(cs);
-    PRINTREG(ss);
-    PRINTREG(ds);
-    PRINTREG(es);
-    PRINTREG(fs);
-    PRINTREG(gs);
+    PRINTREG("eax", gpr[EAX]);
+    PRINTREG("ecx", gpr[ECX]);
+    PRINTREG("edx", gpr[EDX]);
+    PRINTREG("ebx", gpr[EBX]);
+    PRINTREG("esp", gpr[ESP]);
+    PRINTREG("ebp", gpr[EBP]);
+    PRINTREG("esi", gpr[ESI]);
+    PRINTREG("edi", gpr[EDI]);
+    PRINTREG("eip", eip);
+    PRINTREG("eflags", eflags);
+    PRINTREG("cs", cs);
+    PRINTREG("ss", ss);
+    PRINTREG("ds", ds);
+    PRINTREG("es", es);
+    PRINTREG("fs", fs);
+    PRINTREG("gs", gs);
 }
 
 int load_code(char* filename, unsigned char** ppCode, size_t* pnCodeLen)
@@ -103,8 +103,22 @@ void print_code(char* filename, unsigned char* pCode, size_t nCodeLen)
     printf("\n");
 }
 
+void init_registers()
+{
+    gpr[EAX] = 0xbf8db144;
+    gpr[ECX] = 0x88c5ffb;
+    gpr[EDX] = 0x1;
+    gpr[EBX] = 0xae5ff4;
+    gpr[ESP] = 0xbf8db0bc;
+    gpr[EBP] = 0xbf8db118;
+    gpr[ESI] = 0x9a0ca0;
+    gpr[EDI] = 0x0;
+}
+
 void start_emulator(unsigned char* pCode, size_t nCodeLen)
 {
+    init_registers();
+    
     while (EIP < nCodeLen)
     {
         switch (pCode[EIP])
@@ -128,7 +142,7 @@ void start_emulator(unsigned char* pCode, size_t nCodeLen)
             break;
             
         //SAR - Shift Arithmetic Right
-        case SAR_Eb_Ib:
+        case SAR_Eb_Ib:   
             printf("sar\n");
             eip += 3;
             break;
@@ -173,6 +187,8 @@ void start_emulator(unsigned char* pCode, size_t nCodeLen)
             printf("(%02x) not implemented\n", pCode[EIP]);
             eip += 1;
         }
+        print_all_registers();
+        getchar();
     }
 }
 
