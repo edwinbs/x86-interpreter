@@ -6,8 +6,9 @@
  * @email   edwinbs@comp.nus.edu.sg
  */
 
+#include "registers.h"
+
 #include <stdlib.h>
-#include <stdint.h>
 #include <stdio.h>
 
 
@@ -15,40 +16,34 @@
 
 #define MAX_CODE_LEN 1024
 
-#define EAX         0x000
-#define ECX         0x001
-#define EDX         0x010
-#define EBX         0x011
-#define ESP         0x100
-#define EBP         0x101
-#define ESI         0x110
-#define EDI         0x111
+/* Flags to indicate addressing modes */
+#define SRC_IMM_BYTE    (1<<0)  /* Immediate 8-bit operand */
+#define SRC_STACK       (1<<1)
+#define SRC_REG         (1<<2)
 
-uint32_t gpr[8]   = {0};
+#define DST_REG         (1<<3)
+#define DST_ACC         (1<<4)
+#define DST_STACK       (1<<5)
+#define DST_MEM         (1<<6)
 
-#define BASE_EIP    0x8048354
-uint32_t eip      = BASE_EIP;
-#define EIP         (eip - BASE_EIP)
+#define MOD_RM          (1<<7)
 
-uint32_t eflags   = 0x246;
+#define MOV             (1<<8)
 
-uint32_t cs	      = 0x73;
-uint32_t ss	      = 0x7b;
-uint32_t ds	      = 0x7b;
-uint32_t es	      = 0x7b;
-uint32_t fs       = 0x0;
-uint32_t gs       = 0x33;
+/* Addressing mode description for instructions with one-byte opcode */
+uint32_t am[256] = { 0 };
 
-#define LEA_Gv_M    0x8D
-#define AND_AL_Ib   0x24
-#define PUSH_EAX    0x50
-#define SAR_Eb_Ib   0xc1
-#define XOR_AL_Ib   0x34
-#define MOV_Ev_Gv   0x89
-#define INC_EBP     0x45
-#define SUB_Ev_Ib   0x83
-#define CMP_Eb_Ib   0x80
-#define POP_EBP     0x5d
+#define AM(reg, flag) (am[reg] & flag)
+
+typedef struct
+{
+    uint8_t     opcode;
+    uint32_t*   pDst;
+    uint32_t    ea;
+    uint8_t     mod;
+    uint8_t     reg;
+    uint8_t     rm;
+} context_s;
 
 inline void print_all_registers()
 {
@@ -103,92 +98,179 @@ void print_code(char* filename, unsigned char* pCode, size_t nCodeLen)
     printf("\n");
 }
 
+void init_amode()
+{
+    am[0x24] = SRC_IMM_BYTE | DST_ACC;               /* and  AL, Ib */
+    am[0x34] = 0;                                    /* xor  AL, Ib */
+    am[0x45] = DST_REG;                              /* inc  %ebp   */
+    am[0x50] = SRC_REG | DST_STACK;                  /* push %eax   */
+    am[0x5d] = SRC_STACK | DST_REG;                  /* pop  %ebp   */
+    am[0x80] = 0; //TODO                             /* cmp  Eb, Ib */
+    am[0x83] = 0; //TODO                             /* sub  Ev, Ib */
+    am[0x89] = SRC_REG | DST_MEM | MOD_RM | MOV;     /* mov  Ev, Gv */
+    am[0x8d] = DST_REG | MOD_RM;                     /* lea  Gv, M  */
+    am[0xc1] = SRC_IMM_BYTE | DST_MEM | MOD_RM;      /* sar  Eb, Ib */
+}
+
 void init_registers()
 {
-    gpr[EAX] = 0xbf8db144;
-    gpr[ECX] = 0x88c5ffb;
-    gpr[EDX] = 0x1;
-    gpr[EBX] = 0xae5ff4;
-    gpr[ESP] = 0xbf8db0bc;
-    gpr[EBP] = 0xbf8db118;
-    gpr[ESI] = 0x9a0ca0;
-    gpr[EDI] = 0x0;
+    gpr[EAX]    = 0xbf8db144;
+    gpr[ECX]    = 0x88c5ffb;
+    gpr[EDX]    = 0x1;
+    gpr[EBX]    = 0xae5ff4;
+    gpr[ESP]    = 0xbf8db0bc;
+    gpr[EBP]    = 0xbf8db118;
+    gpr[ESI]    = 0x9a0ca0;
+    gpr[EDI]    = 0x0;
+    
+    eip         = BASE_EIP;
+    eflags      = 0x246;
+
+    cs	        = 0x73;
+    ss	        = 0x7b;
+    ds	        = 0x7b;
+    es	        = 0x7b;
+    fs          = 0x0;
+    gs          = 0x33;
+}
+
+inline void decode_sib(unsigned char* pSIBByte, context_s* pCtx)
+{
+    uint8_t ss      = (*pSIBByte       ) >> 5;
+    uint8_t index   = (*pSIBByte & 0x38) >> 2;
+    uint8_t base    = (*pSIBByte & 0x07);
+    
+    switch (base)
+    {
+        case 0: pCtx->ea = gpr[EAX]; break;
+        case 1: pCtx->ea = gpr[ECX]; break;
+        case 2: pCtx->ea = gpr[EDX]; break;
+        case 3: pCtx->ea = gpr[EBX]; break;
+        case 4: pCtx->ea = gpr[ESP]; break;
+        case 5: /* Oh WTF */ break;
+        case 6: pCtx->ea = gpr[ESI]; break;
+        case 7: pCtx->ea = gpr[EDI]; break;
+    }
+}
+
+//Returns the number of bytes consumed
+inline size_t decode_regrm(unsigned char* pModRMByte, context_s* pCtx)
+{
+    uint8_t bSIB = 0;
+    
+    printf("modrm_byte = 0x%x\n", *pModRMByte);
+    
+    pCtx->mod = (*pModRMByte       ) >> 6;
+    pCtx->reg = (*pModRMByte & 0x38) >> 3;
+    pCtx->rm  = (*pModRMByte & 0x07);
+    
+    printf("mod = 0x%x\n", pCtx->mod);
+    printf("reg = 0x%x\n", pCtx->reg);
+    printf("rm  = 0x%x\n", pCtx->rm);
+    
+    if (pCtx->mod == 0 || pCtx->mod == 1 || pCtx->mod == 2)
+    {
+        switch (pCtx->rm)
+        {
+            case 0: pCtx->ea = gpr[EAX]; break;
+            case 1: pCtx->ea = gpr[ECX]; break;
+            case 2: pCtx->ea = gpr[EDX]; break;
+            case 3: pCtx->ea = gpr[EBX]; break;
+            case 4: bSIB = 1; break;
+            case 5: pCtx->ea = gpr[EBP]; break;
+            case 6: pCtx->ea = gpr[ESI]; break;
+            case 7: pCtx->ea = gpr[EDI]; break;
+        }
+    }
+    
+    if (bSIB)
+    {
+        decode_sib(pModRMByte + 1, pCtx);
+    }
+    
+    if (pCtx->mod == 1)
+    {
+        int8_t disp8 = (int8_t) *(pModRMByte + 2);
+        pCtx->ea += disp8;
+    }
+}
+
+inline void decode_instr(unsigned char* pCode, context_s* pCtx)
+{
+    pCtx->opcode = *pCode;
+    
+    decode_regrm(pCode + 1, pCtx);
+    
+    if (AM(pCtx->opcode, DST_REG))
+    {
+        printf("reg = 0x%x\n", pCtx->reg);
+        pCtx->pDst = &(gpr[pCtx->reg]);
+    }
 }
 
 void start_emulator(unsigned char* pCode, size_t nCodeLen)
 {
+    init_amode();
     init_registers();
     
+    context_s ctx;
     while (EIP < nCodeLen)
     {
-        switch (pCode[EIP])
+        print_all_registers();
+        getchar();
+        decode_instr(pCode + EIP, &ctx);
+        switch (ctx.opcode)
         {
-        //LEA - Load Effective Address
-        case LEA_Gv_M:
-            printf("leal\n");
-            eip += 2;
-            break;
-            
-        //AND - Logical AND
-        case AND_AL_Ib:
-            printf("andl\n");
-            eip += 5;
-            break;
-            
-        //PUSH - Push Segment Register onto the Stack
-        case PUSH_EAX:
-            printf("pushl\t%%eax\n");
-            eip += 1;
-            break;
-            
-        //SAR - Shift Arithmetic Right
-        case SAR_Eb_Ib:   
-            printf("sar\n");
-            eip += 3;
-            break;
-            
-        //XOR - Logical Exclusive OR
-        case XOR_AL_Ib:
+        case 0x34: /* xor AL, Ib */
             printf("xor\n");
             eip += 2;
             break;
-            
-        //MOV - Move Data
-        case MOV_Ev_Gv:
-            printf("movl\n");
-            eip += 2;
-            break;
-           
-        //INC - Increment by 1
-        case INC_EBP:
+
+        case 0x45: /* inc %ebp */
             printf("inc\n");
             eip += 1;
             break;
-            
-        //SUB - Integer Subtraction
-        case SUB_Ev_Ib:
-            printf("subl\n");
-            eip += 3;
+
+        case 0x50: /* push %eax */
+            printf("pushl\t%%eax\n");
+            eip += 1;
             break;
-        
-        //CMP - Compare Two Operands
-        case CMP_Eb_Ib:
+
+        case 0x5d: /* pop %ebp */
+            printf("popl\t%%ebp\n");
+            eip += 1;
+            break;
+
+        case 0x80: /* cmp Eb, Ib */
             printf("cmpb\n");
             eip += 5;
             break;
-            
-        //POP - Pop a Word from the Stack
-        case POP_EBP:
-            printf("popl\t%%ebp\n");
-            eip += 1;
+
+        case 0x83: /* sub Ev, Ib */
+            printf("subl\n");
+            eip += 3;
+            break;
+
+        case 0x8d: /* lea Gv, m */
+            printf("leal\n");
+            *(ctx.pDst) = ctx.ea;
+            eip += 4;
+            break;
+
+        case 0x89: /* mov Ev, Gv */
+            printf("movl\n");
+            eip += 2;
+            break;
+
+        case 0xc1: /* sar Eb, Ib */
+            printf("sar\n");
+            eip += 3;
             break;
             
         default:
             printf("(%02x) not implemented\n", pCode[EIP]);
             eip += 1;
         }
-        print_all_registers();
-        getchar();
     }
 }
 
