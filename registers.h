@@ -2,20 +2,23 @@
 
 #include <stdint.h>
 
-#define EAX         0x000
-#define ECX         0x001
-#define EDX         0x010
-#define EBX         0x011
-#define ESP         0x100
-#define EBP         0x101
-#define ESI         0x110
-#define EDI         0x111
+#define EAX         0
+#define ECX         1
+#define EDX         2
+#define EBX         3
+#define ESP         4
+#define EBP         5
+#define ESI         6
+#define EDI         7
 
 uint32_t gpr[8]   = {0};
 
 #define BASE_EIP    0x8048354
 uint32_t eip;
-#define EIP         (eip - BASE_EIP)
+#define EMU_EIP     (eip - BASE_EIP)
+
+#define BASE_ESP    0xbf8db0bc
+#define EMU_ESP     (BASE_ESP - gpr[ESP])
 
 uint32_t eflags;
 

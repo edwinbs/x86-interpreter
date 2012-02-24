@@ -21,28 +21,43 @@
 	<integer>200</integer>
 	<key>metaData</key>
 	<dict>
+		<key>registers.h</key>
+		<dict>
+			<key>caret</key>
+			<dict>
+				<key>column</key>
+				<integer>41</integer>
+				<key>line</key>
+				<integer>20</integer>
+			</dict>
+			<key>firstVisibleColumn</key>
+			<integer>0</integer>
+			<key>firstVisibleLine</key>
+			<integer>0</integer>
+		</dict>
 		<key>x86emu.c</key>
 		<dict>
 			<key>caret</key>
 			<dict>
 				<key>column</key>
-				<integer>42</integer>
+				<integer>21</integer>
 				<key>line</key>
-				<integer>142</integer>
+				<integer>261</integer>
 			</dict>
 			<key>firstVisibleColumn</key>
 			<integer>0</integer>
 			<key>firstVisibleLine</key>
-			<integer>180</integer>
+			<integer>241</integer>
 		</dict>
 	</dict>
 	<key>openDocuments</key>
 	<array>
 		<string>x86emu.c</string>
+		<string>registers.h</string>
 	</array>
 	<key>showFileHierarchyDrawer</key>
 	<true/>
 	<key>windowFrame</key>
-	<string>{{606, 76}, {708, 802}}</string>
+	<string>{{311, 109}, {701, 1279}}</string>
 </dict>
 </plist>
