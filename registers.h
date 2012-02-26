@@ -1,3 +1,11 @@
+/**
+ * registers.h
+ * Declaration of the emulated x86 registers
+ *
+ * @author  Edwin Boaz Soenaryo
+ * @email   edwinbs@comp.nus.edu.sg
+ */
+
 #pragma once
 
 #include <stdint.h>

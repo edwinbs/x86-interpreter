@@ -6,8 +6,8 @@
  * @email   edwinbs@comp.nus.edu.sg
  */
 
-#include <stdarg.h>
 #include "registers.h"
+#include "threaded_dispatch.h"
 
 #include <stdlib.h>
 #include <stdio.h>
@@ -19,6 +19,7 @@
 #define SRC_IMM_BYTE    (1<<0)  /* Immediate 8-bit operand */
 #define DST_REG         (1<<1)
 #define EXTENSION       (1<<2)
+#define MODRM           (1<<3)
 
 /* Addressing mode description for instructions with one-byte opcode */
 uint32_t am[256] = { 0 };
@@ -95,22 +96,9 @@ int load_code(char* filename, unsigned char** ppCode, size_t* pnCodeLen)
 
 void print_code(unsigned char* pCode, size_t nOffset, size_t nCount)
 {
-    int i = 0;
+    size_t i = 0;
     for (i = 0; i < nCount; ++i)
         printf("%02x ", pCode[nOffset + i]);
-}
-
-void init_amode()
-{
-    am[0x34] = 0;                                   /* xor  AL, Ib */
-    am[0x45] = DST_REG;                             /* inc  %ebp   */
-    am[0x50] = 0;                                   /* push %eax   */
-    am[0x5d] = DST_REG;                             /* pop  %ebp   */
-    am[0x80] = DST_REG | SRC_IMM_BYTE;              /* Immed Grp 1 */
-    am[0x83] = SRC_IMM_BYTE | DST_REG | EXTENSION;
-    am[0x89] = 0;                                   /* mov  Ev, Gv */
-    am[0x8d] = DST_REG;                             /* lea  Gv, M  */
-    am[0xc1] = SRC_IMM_BYTE | DST_REG | EXTENSION;  /* sar  Eb, Ib */
 }
 
 void init_registers()
@@ -200,14 +188,17 @@ inline size_t decode_regrm(unsigned char* pModRMByte, context_s* pCtx)
 
 #define AM(flag) (am[pCtx->opcode] & flag)
 
-inline void decode_instr(unsigned char* pCode, context_s* pCtx)
+inline size_t decode_instr(unsigned char* pCode, context_s* pCtx)
 {
     size_t pos = 0;
     
     pCtx->opcode = *pCode;
     ++pos;
     
-    pos += decode_regrm(pCode + pos, pCtx);
+    if (AM(MODRM))
+    {
+        pos += decode_regrm(pCode + pos, pCtx);
+    }
     
     if (AM(SRC_IMM_BYTE))
     {
@@ -222,6 +213,8 @@ inline void decode_instr(unsigned char* pCode, context_s* pCtx)
         else
             pCtx->pDst = &(gpr[pCtx->reg]);
     }
+    
+    return pos;
 }
 
 inline void set_flags(uint32_t mask)
@@ -296,14 +289,8 @@ inline void push(const uint32_t* pReg)
     gpr[ESP] -= 4;
 }
 
-void start_emulator(unsigned char* pCode, size_t nCodeLen)
+void emulate(unsigned char* pCode, size_t nCodeLen)
 {   
-    init_amode();
-    init_registers();
-    
-    print_all_registers();
-    getchar();
-    
     context_s   ctx;
     int8_t      tmp_b;
     int32_t     tmp_l;
@@ -311,186 +298,123 @@ void start_emulator(unsigned char* pCode, size_t nCodeLen)
     size_t      prev_instr_offset = 0;
     char*       last_instr_name = "";
     
-    while (EMU_EIP < nCodeLen)
+    init_registers();
+    
+    BEGIN_OPCODE_MAP
+    MAP1(0x34,          xor_AL_Ib,  MODRM)
+    MAPR(0x40, 0x47,    inc_gpr,    DST_REG)
+    MAPR(0x48, 0x4f,    dec_gpr,    0)
+    MAPR(0x50, 0x57,    push_gpr,   0)
+    MAPR(0x58, 0x5f,    pop_gpr,    DST_REG)
+    MAP1_EXT(0x80, 0x7, cmp_Eb_Ib,  DST_REG | SRC_IMM_BYTE | MODRM)
+    MAP1_EXT(0x83, 0x4, and_Ev_Ib,  SRC_IMM_BYTE | DST_REG | EXTENSION | MODRM)
+    MAP1_EXT(0x83, 0x5, sub_Ev_Ib,  SRC_IMM_BYTE | DST_REG | EXTENSION | MODRM)
+    MAP1(0x89,          mov_Ev_Gv,  MODRM)
+    MAP1(0x8d,          lea_Gv_m,   DST_REG | MODRM)
+    MAP1_EXT(0xc1, 0x7, sar_Ev_Ib,  SRC_IMM_BYTE | DST_REG | EXTENSION | MODRM)
+    END_OPCODE_MAP
+    
+INSTR(xor_AL_Ib)
+    last_instr_name = "xor";
+    gpr[EAX] ^= (ctx.modregrm & REG_L);
+    
+    modify_flags(EFLAGS_PF | EFLAGS_ZF | EFLAGS_SF, gpr[EAX] & REG_L, 0, 0); //operands not required
+    clear_flags(EFLAGS_OF | EFLAGS_CF);
+
+INSTR(inc_gpr)
+    last_instr_name = "inc";
+    tmp_l = gpr[ctx.opcode - 0x40];
+    ++(gpr[ctx.opcode - 0x40]);
+    modify_flags(EFLAGS_OF | EFLAGS_SF | EFLAGS_ZF | EFLAGS_AF | EFLAGS_PF,
+        gpr[ctx.opcode - 0x40], tmp_l, 1);
+    
+INSTR(dec_gpr)
+    last_instr_name = "dec";
+    tmp_l = gpr[ctx.opcode - 0x48];
+    --(gpr[ctx.opcode - 0x48]);
+    modify_flags(EFLAGS_OF | EFLAGS_SF | EFLAGS_ZF | EFLAGS_AF | EFLAGS_PF,
+        gpr[ctx.opcode - 0x40], tmp_l, -1);
+
+INSTR(push_gpr)
+    last_instr_name = "push";
+    push(&gpr[ctx.opcode - 0x50]);
+
+INSTR(pop_gpr)
+    last_instr_name = "pop";
+    pop(&gpr[ctx.opcode - 0x58]);
+
+INSTR(cmp_Eb_Ib)
+    last_instr_name = "cmp";
+    
+    /* CMP works by performing subtraction as in SUB,
+       and sets flags the same way */
+    int8_t src_op = stack[BASE_ESP - ctx.ea];
+    
+    if ((uint8_t) src_op < (uint8_t) ctx.immed)
+        set_flags(EFLAGS_CF);
+    else
+        clear_flags(EFLAGS_CF);
+       
+    tmp_b = (int8_t) src_op - (int8_t) ctx.immed;
+    modify_flags(EFLAGS_OF | EFLAGS_SF | EFLAGS_ZF | EFLAGS_AF | EFLAGS_PF,
+        tmp_b, src_op, -1 * ctx.immed);
+
+INSTR(and_Ev_Ib)
+    last_instr_name = "and";
+    *(ctx.pDst) &= ctx.immed;
+    
+    modify_flags(EFLAGS_PF | EFLAGS_ZF | EFLAGS_SF, *(ctx.pDst), 0, 0); //operands not required
+    clear_flags(EFLAGS_OF | EFLAGS_CF);
+        
+INSTR(sub_Ev_Ib)
+    last_instr_name = "sub";
+    /* SUB evaluates the operands as both signed and unsigned,
+       set CF according to unsigned, the rest according to signed. */
+    
+    if ((uint32_t) *(ctx.pDst) < (uint32_t) ctx.immed)
+        set_flags(EFLAGS_CF);
+    else
+        clear_flags(EFLAGS_CF);
+    
+    /* now treat operands as signed */
+    tmp_l = *(ctx.pDst);
+    *(ctx.pDst) -= ctx.immed;
+    
+    modify_flags(EFLAGS_OF | EFLAGS_SF | EFLAGS_ZF | EFLAGS_AF | EFLAGS_PF,
+        *(ctx.pDst), tmp_l, -1 * ctx.immed);
+
+INSTR(mov_Ev_Gv)
+    last_instr_name = "movl";
+    if (ctx.mod == 0x3)
+        gpr[ctx.rm] = gpr[ctx.reg];
+
+INSTR(lea_Gv_m)
+    last_instr_name = "leal";
+    *(ctx.pDst) = ctx.ea;
+
+INSTR(sar_Ev_Ib)
+    last_instr_name = "sar";
+    
+    /* On SAR, CF contains the last bit shifted out */
+    if ((int32_t) *(ctx.pDst) & (1 >> ctx.immed))
+        set_flags(EFLAGS_CF);
+    else
+        clear_flags(EFLAGS_CF);
+        
+    /* OF is only affected for 1-bit shifts */
+    if (ctx.immed == 1)
     {
-        decode_instr(pCode + EMU_EIP, &ctx);
-        switch (ctx.opcode)
-        {
-        case 0x34: /* xor AL, Ib */
-            last_instr_name = "xor";
-            gpr[EAX] ^= (ctx.modregrm & REG_L);
-            
-            modify_flags(EFLAGS_PF | EFLAGS_ZF | EFLAGS_SF, gpr[EAX] & REG_L, 0, 0); //operands not required
-            clear_flags(EFLAGS_OF | EFLAGS_CF);
-            
-            eip += 2;
-            break;
-
-        case 0x40 ... 0x47: /* inc gpr */
-            last_instr_name = "inc";
-            tmp_l = gpr[ctx.opcode - 0x40];
-            ++(gpr[ctx.opcode - 0x40]);
-            modify_flags(EFLAGS_OF | EFLAGS_SF | EFLAGS_ZF | EFLAGS_AF | EFLAGS_PF,
-                gpr[ctx.opcode - 0x40], tmp_l, 1);
-            eip += 1;
-            break;
-            
-        case 0x48 ... 0x4f: /* dec gpr */
-            last_instr_name = "dec";
-            tmp_l = gpr[ctx.opcode - 0x48];
-            --(gpr[ctx.opcode - 0x48]);
-            modify_flags(EFLAGS_OF | EFLAGS_SF | EFLAGS_ZF | EFLAGS_AF | EFLAGS_PF,
-                gpr[ctx.opcode - 0x40], tmp_l, -1);
-            eip += 1;
-            break;
-
-        case 0x50 ... 0x57: /* push gpr */
-            last_instr_name = "push";
-            push(&gpr[ctx.opcode - 0x50]);
-            eip += 1;
-            break;
-
-        case 0x58 ... 0x5f: /* pop gpr */
-            last_instr_name = "pop";
-            pop(&gpr[ctx.opcode - 0x58]);
-            eip += 1;
-            break;
-
-        case 0x80: /* Immediate Grp 1 */
-            switch (ctx.reg)
-            {
-            case 0x7:   /* cmp */
-            {
-                last_instr_name = "cmp";
-                
-                /* CMP works by performing subtraction as in SUB,
-                   and sets flags the same way */
-                int8_t src_op = stack[BASE_ESP - ctx.ea];
-                
-                if ((uint8_t) src_op < (uint8_t) ctx.immed)
-                    set_flags(EFLAGS_CF);
-                else
-                    clear_flags(EFLAGS_CF);
-                   
-                tmp_b = (int8_t) src_op - (int8_t) ctx.immed;
-                modify_flags(EFLAGS_OF | EFLAGS_SF | EFLAGS_ZF | EFLAGS_AF | EFLAGS_PF,
-                    tmp_b, src_op, -1 * ctx.immed);
-                
-                eip += 5;
-                break;
-            }
-                
-            default:
-                printf("[ext 0x%x] not implemented\n", ctx.reg);
-                eip += 5;
-            }
-            break;
-
-        case 0x83: /* Immediate Grp 1 */
-            switch (ctx.reg)
-            {
-            case 0x4:
-                last_instr_name = "and";
-                *(ctx.pDst) &= ctx.immed;
-                
-                modify_flags(EFLAGS_PF | EFLAGS_ZF | EFLAGS_SF, *(ctx.pDst), 0, 0); //operands not required
-                clear_flags(EFLAGS_OF | EFLAGS_CF);
-                
-                eip += 3;
-                break;
-                
-            case 0x5:
-            {
-                last_instr_name = "sub";
-                /* SUB evaluates the operands as both signed and unsigned,
-                   set CF according to unsigned, the rest according to signed. */
-                
-                if ((uint32_t) *(ctx.pDst) < (uint32_t) ctx.immed)
-                    set_flags(EFLAGS_CF);
-                else
-                    clear_flags(EFLAGS_CF);
-                
-                /* now treat operands as signed */
-                tmp_l = *(ctx.pDst);
-                *(ctx.pDst) -= ctx.immed;
-                
-                modify_flags(EFLAGS_OF | EFLAGS_SF | EFLAGS_ZF | EFLAGS_AF | EFLAGS_PF,
-                    *(ctx.pDst), tmp_l, -1 * ctx.immed);
-                    
-                eip += 3;
-                break;
-            }
-                
-            default:
-                printf("[ext 0x%02x] not implemented\n", ctx.reg);
-                eip += 3;
-            }
-            break;
-
-        case 0x8d: /* lea Gv, m */
-            last_instr_name = "leal";
-            *(ctx.pDst) = ctx.ea;
-            eip += 4;
-            break;
-
-        case 0x89: /* mov Ev, Gv */
-            last_instr_name = "movl";
-            switch (ctx.mod)
-            {
-            case 0x3: // Mod=11
-                gpr[ctx.rm] = gpr[ctx.reg];
-                eip += 2;
-                break;
-                
-            default:
-                printf("[mod 0x%x] not understood\n", ctx.mod);
-                eip += 2;
-            }
-            break;
-
-        case 0xc1: /* Shift Grp 2 */
-            switch (ctx.reg)
-            {
-            case 0x7:
-                last_instr_name = "sar";
-                
-                /* On SAR, CF contains the last bit shifted out */
-                if ((int32_t) *(ctx.pDst) & (1 >> ctx.immed))
-                    set_flags(EFLAGS_CF);
-                else
-                    clear_flags(EFLAGS_CF);
-                    
-                /* OF is only affected for 1-bit shifts */
-                if (ctx.immed == 1)
-                {
-                    /* For SAR, OF is cleared for 1-bit shifts */
-                    clear_flags(EFLAGS_OF);
-                }
-                
-                *(ctx.pDst) = (int32_t) *(ctx.pDst) >> ctx.immed;
-                eip += 3;
-                break;
-                
-            default:
-                printf("[ext 0x%02x] not implemented\n", ctx.reg);
-                eip += 3;
-            }
-            break;
-            
-        default:
-            printf("EMULATION FAILED [0x%02x]\n", pCode[EMU_EIP]);
-            eip += 1;
-        }
-        
-        print_code(pCode, prev_instr_offset, EMU_EIP - prev_instr_offset);
-        printf("\t%s\n\n", last_instr_name);
-        
-        prev_instr_offset = EMU_EIP;
-        
-        print_all_registers();
-        print_stack();
-        getchar();
+        /* For SAR, OF is cleared for 1-bit shifts */
+        clear_flags(EFLAGS_OF);
     }
+    
+    *(ctx.pDst) = (int32_t) *(ctx.pDst) >> ctx.immed;
+    
+ON_CANNOT_EMULATE
+    printf("EMULATION FAILED [0x%02x]\n", pCode[EMU_EIP]);
+    
+ON_HALT
+    printf("halt\n");
 }
 
 int main(int argc, char** argv)
@@ -515,5 +439,5 @@ int main(int argc, char** argv)
     print_code(pCode, 0, nCodeLen);
     printf("\n");
     
-    start_emulator(pCode, nCodeLen);
+    emulate(pCode, nCodeLen);
 }
