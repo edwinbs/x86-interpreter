@@ -28,3 +28,19 @@ uint32_t ds;
 uint32_t es;
 uint32_t fs;
 uint32_t gs;
+
+/* Mask for < 32-bit registers */
+#define REG_L           0x000000ff      //e.g. AL
+#define REG_H           0x0000ff00      //e.g. AH
+#define REG_X           0x0000ffff      //e.g. AX   
+
+/* Some EFLAGS masks */
+#define EFLAGS_CF       (1<<0)
+#define EFLAGS_PF       (1<<2)
+#define EFLAGS_AF       (1<<4)
+#define EFLAGS_ZF       (1<<6)
+#define EFLAGS_SF       (1<<7)
+#define EFLAGS_TF       (1<<8)
+#define EFLAGS_IF       (1<<9)
+#define EFLAGS_DF       (1<<10)
+#define EFLAGS_OF       (1<<11)
