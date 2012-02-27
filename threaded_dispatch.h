@@ -35,6 +35,7 @@
     prev_instr_offset = EMU_EIP;                                            \
     print_all_registers();                                                  \
     print_stack();                                                          \
+	printf("(Press ENTER to step an instruction)");							\
     getchar();                                                              \
                                                                             \
 	if (EMU_EIP >= nCodeLen) goto halt;                                     \
