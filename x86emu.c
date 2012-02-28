@@ -3,8 +3,7 @@
  * A partial x86 emulator for CS6270
  *
  * The design of this emulator can only handle 1-byte opcodes.
- * It only emulates registers and the stack.
- * Any reference to heap will crash the emulator.
+ * For memory, it only emulates registers and the stack.
  *
  * @author  Edwin Boaz Soenaryo
  * @email   edwinbs@comp.nus.edu.sg
@@ -47,6 +46,7 @@ typedef struct
     int8_t      immed;		/* 1-byte immediate operand */
     int32_t     immed_l;    /* double word immediate operand */
     uint8_t     eff_reg;    /* register index that will be used */
+    int8_t      disp_bits;  /* number of displacement bits */
 } context_s;
 
 #define PRINTREG(name, val) printf("%s\t0x%x\n", name, val)
@@ -187,10 +187,48 @@ inline void decode_sib(unsigned char* pSIBByte, context_s* pCtx)
         case 2: pCtx->ea = gpr[EDX]; break;
         case 3: pCtx->ea = gpr[EBX]; break;
         case 4: pCtx->ea = gpr[ESP]; break;
-        case 5: /* TODO */ break;
+        case 5:
+            if (pCtx->mod == 0x0)
+            {
+                pCtx->ea = 0x0;
+                pCtx->disp_bits = 32;
+            }
+            else if (pCtx->mod == 0x1)
+            {
+                pCtx->ea = gpr[EBP];
+                pCtx->disp_bits = 8;
+            }
+            else if (pCtx-> mod == 0x2)
+            {
+                pCtx->ea = gpr[EBP];
+                pCtx->disp_bits = 32;
+            }
+            break;
         case 6: pCtx->ea = gpr[ESI]; break;
         case 7: pCtx->ea = gpr[EDI]; break;
     }
+    
+    uint8_t index_val = 0;
+    switch (index)
+    {
+        case 0: index_val = gpr[EAX]; break;
+        case 1: index_val = gpr[ECX]; break;
+        case 2: index_val = gpr[EDX]; break;
+        case 3: index_val = gpr[EBX]; break;
+        case 4: index_val = 0; break;
+        case 5: index_val = gpr[EBP]; break;
+        case 6: index_val = gpr[ESI]; break;
+        case 7: index_val = gpr[EDI]; break;
+    }
+    
+    switch (ss)
+    {
+        case 1: index_val *= 2; break;
+        case 2: index_val *= 4; break;
+        case 3: index_val *= 8; break;
+    }
+    
+    pCtx->ea += index_val;
 }
 
 /**
@@ -218,7 +256,7 @@ inline size_t decode_regrm(unsigned char* pModRMByte, context_s* pCtx)
             case 2: pCtx->ea = gpr[EDX]; break;
             case 3: pCtx->ea = gpr[EBX]; break;
             case 4: bSIB = 1; break;
-            case 5: pCtx->ea = gpr[EBP]; break;
+            case 5: pCtx->ea = (pCtx->mod == 0x0) ? 0x0 : gpr[EBP]; break;
             case 6: pCtx->ea = gpr[ESI]; break;
             case 7: pCtx->ea = gpr[EDI]; break;
         }
@@ -228,7 +266,15 @@ inline size_t decode_regrm(unsigned char* pModRMByte, context_s* pCtx)
         pCtx->ea = (unsigned long) &(gpr[pCtx->rm]);
     }
     
-    ++pos;
+    /* Determine if there is a displacement byte/dword */
+    if (pCtx->mod == 0x1 || (pCtx->mod == 0x0 && pCtx->rm == 0x5))
+        pCtx->disp_bits = 8;
+    else if (pCtx->mod == 0x2)
+        pCtx->disp_bits = 32;
+    else
+        pCtx->disp_bits = 0;
+    
+    ++pos; /* ModR/M Byte has been processed */
     
     if (bSIB)
     {
@@ -236,19 +282,18 @@ inline size_t decode_regrm(unsigned char* pModRMByte, context_s* pCtx)
         ++pos;
     }
     
-    if (pCtx->mod == 1)
+    if (pCtx->disp_bits == 8)
     {
         int8_t disp8 = (int8_t) *(pModRMByte + pos);
         pCtx->ea += disp8;
         ++pos;
     }
-    else if (pCtx->mod == 2)
+    else if (pCtx->disp_bits == 32)
     {
         int32_t disp32 = *((int32_t *) (pModRMByte + pos));
         pCtx->ea += disp32;
         pos += 4;
     }
-    
     return pos;
 }
 

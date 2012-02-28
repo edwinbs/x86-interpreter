@@ -1,0 +1,11 @@
+55                   	push   %ebp
+89 e5                	mov    %esp,%ebp
+53                   	push   %ebx
+83 ec 04             	sub    $0x4,%esp
+5b                   	pop    %ebx
+81 c3 50 1d 00 00    	add    $0x1d50,%ebx
+85 d2                	test   %edx,%edx
+58                   	pop    %eax
+5b                   	pop    %ebx
+21 c1                   andl   %eax, $edx
+23 c1                   andl   %edx, %eax

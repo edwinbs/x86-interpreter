@@ -16,7 +16,6 @@ Package contents:
 /README.txt                 This file
 /testcases/input1.txt       Sample input from assignment sheet
 /testcases/input2.txt       Some arbitrary instructions
-/testcases/input3.txt       Lots of arithmetic
 
 Usage:
 -------
