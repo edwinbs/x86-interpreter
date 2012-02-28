@@ -270,13 +270,9 @@ inline size_t decode_instr(unsigned char* pCode, context_s* pCtx)
         pos += decode_regrm(pCode + pos, pCtx);
         
         if (AM(EXTENSION))
-        {
             pCtx->eff_reg = pCtx->rm;
-        }
         else
-        {
             pCtx->eff_reg = pCtx->reg;
-        }
     }
     
     if (AM(SRC_IMM_BYTE))
@@ -370,6 +366,25 @@ inline void modify_flags(uint32_t mask, int32_t res, int32_t op1, int32_t op2)
             clear_flags(EFLAGS_OF);
     }
 }
+
+/**
+ * \brief   Checks if the given pointer points to the emulated stack
+ * \param   ptr     [in] the pointer to check
+ * \return  1 if in the emulated stack, 0 if not
+ */
+inline int in_stack(const void* ptr)
+{
+    int64_t pos = BASE_ESP - (uint32_t) ptr;
+    return (pos >= 0 && pos <= EMU_ESP ? 1 : 0);
+}
+
+/**
+ * Dereferences a pointer.
+ * If the pointer is in the emulated stack, value is taken from stack,
+ * otherwise it is dereferenced from host memory and hopefully it does not
+ * crash the emulator~~
+ */
+#define DEREF(ptr) (in_stack(ptr) ? stack[BASE_ESP - (uint32_t) (ptr)] : *(ptr))
 
 /**
  * \brief  Pops 32-bit value from the top of the stack and unwinds the stack
@@ -536,25 +551,6 @@ inline void dec(uint32_t* pReg)
 
 /* Macros for addressing modes */
 
-/**
- * \brief   Checks if the given pointer points to the emulated stack
- * \param   ptr     [in] the pointer to check
- * \return  1 if in the emulated stack, 0 if not
- */
-inline int in_stack(const void* ptr)
-{
-    int64_t pos = BASE_ESP - (uint32_t) ptr;
-    return (pos >= 0 && pos <= EMU_ESP ? 1 : 0);
-}
-
-/**
- * Dereferences a pointer.
- * If the pointer is in the emulated stack, value is taken from stack,
- * otherwise it is dereferenced from host memory and hopefully it does not
- * crash the emulator~~
- */
-#define DEREF(ptr) (in_stack(ptr) ? stack[BASE_ESP - (uint32_t) (ptr)] : *(ptr))
-
 /* Gb: byte-sized register */
 #define PTR_Gb  (gprbyte[ctx.eff_reg])
 #define VAL_Gb  DEREF(PTR_Gb)
@@ -588,15 +584,6 @@ inline int in_stack(const void* ptr)
  */
 void emulate(unsigned char* pCode, size_t nCodeLen)
 {   
-    context_s   ctx;
-    int8_t      tmp_b;
-    int32_t     tmp_l;
-    
-    size_t      prev_instr_offset = 0;
-    char*       last_instr_name = "";
-    
-    init_registers();
-    
     BEGIN_OPCODE_MAP
     
     /* Formats:
@@ -647,12 +634,23 @@ void emulate(unsigned char* pCode, size_t nCodeLen)
     MAPR(0x50, 0x57,    push_gpr,   REG_ALT_ENC)
     MAPR(0x58, 0x5f,    pop_gpr,    REG_ALT_ENC)
     
+    MAP1_EXT(0x80, 0x0, add_Eb_Ib,  SRC_IMM_BYTE | MODRM)
+    MAP1_EXT(0x80, 0x4, and_Eb_Ib,  SRC_IMM_BYTE | MODRM)
+    MAP1_EXT(0x80, 0x5, sub_Eb_Ib,  SRC_IMM_BYTE | MODRM)
+    MAP1_EXT(0x80, 0x6, xor_Eb_Ib,  SRC_IMM_BYTE | MODRM)
     MAP1_EXT(0x80, 0x7, cmp_Eb_Ib,  SRC_IMM_BYTE | MODRM)
     
     MAP1_EXT(0x81, 0x0, add_Ev_Iz,  SRC_IMM_LONG | EXTENSION | MODRM)
+    MAP1_EXT(0x81, 0x4, and_Ev_Iz,  SRC_IMM_LONG | EXTENSION | MODRM)
+    MAP1_EXT(0x81, 0x5, sub_Ev_Iz,  SRC_IMM_LONG | EXTENSION | MODRM)
+    MAP1_EXT(0x81, 0x6, xor_Ev_Iz,  SRC_IMM_LONG | EXTENSION | MODRM)
+    MAP1_EXT(0x81, 0x7, cmp_Ev_Iz,  SRC_IMM_LONG | EXTENSION | MODRM)
     
+    MAP1_EXT(0x83, 0x0, add_Ev_Ib,  SRC_IMM_BYTE | EXTENSION | MODRM)
     MAP1_EXT(0x83, 0x4, and_Ev_Ib,  SRC_IMM_BYTE | EXTENSION | MODRM)
     MAP1_EXT(0x83, 0x5, sub_Ev_Ib,  SRC_IMM_BYTE | EXTENSION | MODRM)
+    MAP1_EXT(0x83, 0x6, xor_Ev_Ib,  SRC_IMM_BYTE | EXTENSION | MODRM)
+    MAP1_EXT(0x83, 0x7, cmp_Ev_Ib,  SRC_IMM_BYTE | EXTENSION | MODRM)
     
     MAP1(0x84,          test_Eb_Gb, MODRM)
     MAP1(0x85,          test_Ev_Gv, MODRM)
@@ -662,9 +660,17 @@ void emulate(unsigned char* pCode, size_t nCodeLen)
     
     MAP1(0x8d,          lea_Gv_m,   MODRM)
     
+    MAP1(0x90,          nop,        0)
+    
+    MAP1_EXT(0xc0, 0x7, sar_Eb_Ib,  SRC_IMM_BYTE | EXTENSION | MODRM)
     MAP1_EXT(0xc1, 0x7, sar_Ev_Ib,  SRC_IMM_BYTE | EXTENSION | MODRM)
     
+    MAP1(0xc6,          mov_Eb_Ib,  SRC_IMM_BYTE | MODRM)
+    MAP1(0xc7,          mov_Ev_Iz,  SRC_IMM_LONG | MODRM)
+    
     END_OPCODE_MAP
+    
+    BEGIN_DISPATCH
     
     /* Format: INSTR(UNIQUE_NAME) { __any_code__ }
      * UNIQUE_NAME must match the opcode map
@@ -706,24 +712,39 @@ void emulate(unsigned char* pCode, size_t nCodeLen)
 	INSTR(push_gpr)   { push(PTR_Gv); }
 	INSTR(pop_gpr)    { pop (PTR_Gv); }
 
+    INSTR(add_Eb_Ib)  { ADD(int8_t,  PTR_Eb,  VAL_Ib); }
+    INSTR(and_Eb_Ib)  { AND(int8_t,  PTR_Eb,  VAL_Ib); }
+    INSTR(sub_Eb_Ib)  { SUB(int8_t,  PTR_Eb,  VAL_Ib); }
+    INSTR(xor_Eb_Ib)  { XOR(int8_t,  PTR_Eb,  VAL_Ib); }
 	INSTR(cmp_Eb_Ib)  { CMP(int8_t,  VAL_Eb,  VAL_Ib); }
 	
 	INSTR(add_Ev_Iz)  { ADD(int32_t, PTR_Ev,  VAL_Iz); }
+	INSTR(and_Ev_Iz)  { AND(int32_t, PTR_Ev,  VAL_Iz); }
+	INSTR(sub_Ev_Iz)  { SUB(int32_t, PTR_Ev,  VAL_Iz); }
+	INSTR(xor_Ev_Iz)  { XOR(int32_t, PTR_Ev,  VAL_Iz); }
+	INSTR(cmp_Ev_Iz)  { CMP(int32_t, VAL_Ev,  VAL_Iz); }
 
+    INSTR(add_Ev_Ib)  { ADD(int32_t, PTR_Ev,  VAL_Ib); }
 	INSTR(and_Ev_Ib)  { AND(int32_t, PTR_Ev,  VAL_Ib); }
-			
 	INSTR(sub_Ev_Ib)  { SUB(int32_t, PTR_Ev,  VAL_Ib); }
+	INSTR(xor_Ev_Ib)  { XOR(int32_t, PTR_Ev,  VAL_Ib); }
+	INSTR(cmp_Ev_Ib)  { CMP(int32_t, VAL_Ev,  VAL_Ib); }
 	
 	INSTR(test_Eb_Gb) { TEST(int8_t,  VAL_Eb, VAL_Gb); }
 	INSTR(test_Ev_Gv) { TEST(int32_t, VAL_Ev, VAL_Gv); }
 
 	INSTR(mov_Ev_Gv)  { MOV(int32_t, PTR_Ev,  VAL_Gv); }
-	
 	INSTR(mov_Gv_Ev)  { MOV(int32_t, PTR_Gv,  VAL_Ev); }
 
 	INSTR(lea_Gv_m)   { *PTR_Gv = (int32_t) PTR_Ev;    }
+	
+    INSTR(nop)        { }
 
+    INSTR(sar_Eb_Ib)  { SAR(int32_t, PTR_Eb,  VAL_Ib); }
 	INSTR(sar_Ev_Ib)  { SAR(int32_t, PTR_Ev,  VAL_Ib); }
+	
+	INSTR(mov_Eb_Ib)  { MOV(int8_t,  PTR_Eb,  VAL_Ib); }
+	INSTR(mov_Ev_Iz)  { MOV(int32_t, PTR_Ev,  VAL_Iz); }
 		
 	ON_CANNOT_EMULATE /* Opcodes that are not implemented goes here */
 	{

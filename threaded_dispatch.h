@@ -8,6 +8,8 @@
 
 #pragma once
 
+#include <assert.h>
+
 /* Declares op_ptr, which is the lookup table for the opcodes
    Targets are initialized to cannot_emulate */
 #define BEGIN_OPCODE_MAP                                                       \
@@ -18,8 +20,10 @@
             for(_ext=0;_ext<8;++_ext)                                          \
                 op_ptr[_op][_ext] = &&cannot_emulate;
 
-/* Maps a single opcode and extension to a label */
+/* Maps a single opcode and extension to a label
+   There is an assertion for sanity check */
 #define MAP1_EXT(opcode, ext, label, am_flags)                                 \
+        assert (op_ptr[(opcode)][ext] == &&cannot_emulate);                    \
         op_ptr[(opcode)][ext] = &&label;                                       \
         am[(opcode)] = am_flags;
 
@@ -34,6 +38,13 @@
 
 #define END_OPCODE_MAP                                                         \
     }
+
+/* Variable declarations and register init -- must go BEFORE any INSTR() */
+#define BEGIN_DISPATCH                                                         \
+    context_s   ctx;                                                           \
+    size_t      prev_instr_offset = 0;                                         \
+    char*       last_instr_name = "";                                          \
+    init_registers();
 
 /* Dispatch code, appended at the end of each instruction's impl
    First few lines are useless, ignore them
