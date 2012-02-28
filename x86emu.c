@@ -3,7 +3,8 @@
  * A partial x86 emulator for CS6270
  *
  * The design of this emulator can only handle 1-byte opcodes.
- * It only emulates the stack and not the heap.
+ * It only emulates registers and the stack.
+ * Any reference to heap will crash the emulator.
  *
  * @author  Edwin Boaz Soenaryo
  * @email   edwinbs@comp.nus.edu.sg
@@ -20,10 +21,10 @@
 
 /* Flags to indicate addressing modes */
 #define SRC_IMM_BYTE    (1<<0)  /* Immediate 8-bit operand */
-#define DST_REG         (1<<1)	/* The destination operand is a GPR */
-#define EXTENSION       (1<<2)	/* REG in MOD_REG_RM refers to opcode ext */
-#define MODRM           (1<<3)	/* There is a MOD_REG_RM byte */
-#define SRC_IMM_LONG    (1<<4)  /* Immediate double word operand */
+#define EXTENSION       (1<<1)	/* REG in MOD_REG_RM refers to opcode ext */
+#define MODRM           (1<<2)	/* There is a MOD_REG_RM byte */
+#define SRC_IMM_LONG    (1<<3)  /* Immediate double word operand */
+#define REG_ALT_ENC     (1<<4)  /* Register encoded as 3 LSbits of opcode */
 
 /* Addressing mode description for instructions with one-byte opcode */
 uint32_t am[256] = { 0 };
@@ -39,7 +40,6 @@ uint8_t stack[1024] = { 0 };
 typedef struct
 {
     uint8_t     opcode;		/* 1-byte opcode */
-    int32_t*    pDst;		/* pointer to 32-bit destination */
     unsigned long    ea;	/* effective address from MOD_REG_RM byte */
     uint8_t     mod;		/* MOD part of the MOD_REG_RM byte */
     uint8_t     reg;		/* REG part of the MOD_REG_RM byte */
@@ -268,7 +268,15 @@ inline size_t decode_instr(unsigned char* pCode, context_s* pCtx)
     if (AM(MODRM))
     {
         pos += decode_regrm(pCode + pos, pCtx);
-        pCtx->eff_reg = pCtx->reg;
+        
+        if (AM(EXTENSION))
+        {
+            pCtx->eff_reg = pCtx->rm;
+        }
+        else
+        {
+            pCtx->eff_reg = pCtx->reg;
+        }
     }
     
     if (AM(SRC_IMM_BYTE))
@@ -283,18 +291,9 @@ inline size_t decode_instr(unsigned char* pCode, context_s* pCtx)
         pos += 4;
     }
     
-    if (AM(DST_REG))
+    if (AM(REG_ALT_ENC))
     {
-        if (AM(EXTENSION))
-        {
-            pCtx->pDst = &(gpr[pCtx->rm]);
-            pCtx->eff_reg = pCtx->rm;
-        }
-        else
-        {
-            pCtx->pDst = &(gpr[pCtx->reg]);
-            pCtx->eff_reg = pCtx->reg;
-        }
+        pCtx->eff_reg = (pCtx->opcode) & 0x07;
     }
     
     return pos;
@@ -325,7 +324,7 @@ inline void clear_flags(uint32_t mask)
  * \brief   Modifies the required flags based on the result of last operation.
  *          For OF, the operation is assumed to be ADD,
  *              if it is SUB then the given operand must be negated.
- *          Operands are only required if OF is chosen. Otherwise, may set to 0.
+ *          Operands are only required if OF is chosen.
  * \param   mask    [in]  bits representing the flags to be modified
  * \param   result  [in]  result of the last operation
  * \param   op1     [in]  first operand of the last operation
@@ -400,6 +399,10 @@ inline void push(const uint32_t* pReg)
     gpr[ESP] -= 4;
 }
 
+/**
+ * \brief   Increments a 32-bit register
+ * \param   pReg    [in] pointer to the register to be incremented
+ */
 inline void inc(uint32_t* pReg)
 {
 	uint32_t prev_val = *pReg;
@@ -408,6 +411,10 @@ inline void inc(uint32_t* pReg)
 		*pReg, prev_val, 1);
 }
 
+/**
+ * \brief   Decrements a 32-bit register
+ * \param   pReg    [in] pointer to the register to be decremented
+ */
 inline void dec(uint32_t* pReg)
 {
 	uint32_t prev_val = *pReg;
@@ -416,14 +423,10 @@ inline void dec(uint32_t* pReg)
 		*pReg, prev_val, -1);
 }
 
-inline int in_stack(const void* ptr)
-{
-    int64_t pos = BASE_ESP - (uint32_t) ptr;
-    return (pos >= 0 && pos <= EMU_ESP ? 1 : 0);
-}
-
-#define DEREF(ptr) (in_stack(ptr) ? stack[BASE_ESP - (uint32_t) (ptr)] : *(ptr))
-
+/**
+ * dst <- dst + src (treated as signed)
+ * EFLAGS affected: CF, OF, SF, ZF, AF, PF
+ */
 #define ADD(T, pDst, src)                                                      \
 {	                                                                           \
     u##T result_u = (u##T) *pDst + (u##T) src;                                 \
@@ -438,6 +441,10 @@ inline int in_stack(const void* ptr)
 	    *pDst, prev_dst, src);                                                 \
 }
 
+/**
+ * dst <- dst _bitwise_and_ src
+ * EFLAGS affected: PF, ZF, SF; cleared: OF, CF
+ */
 #define AND(T, pDst, src)                                                      \
 {                                                                              \
     *pDst &= src;                                                              \
@@ -445,6 +452,10 @@ inline int in_stack(const void* ptr)
 	clear_flags(EFLAGS_OF | EFLAGS_CF);                                        \
 }
 
+/**
+ * dst <- dst - src
+ * EFLAGS affected: CF, OF, SF, ZF, AF, PF
+ */
 #define SUB(T, pDst, src)                                                      \
 {                                                                              \
     if ((u##T) *pDst < (u##T) src)                                             \
@@ -459,6 +470,10 @@ inline int in_stack(const void* ptr)
 	    *pDst, prev_dst, -1 * src);                                            \
 }
 
+/**
+ * dst <- dst _bitwise_xor_ src
+ * EFLAGS affected: PF, ZF, SF; cleared: OF, CF
+ */
 #define XOR(T, pDst, src)                                                      \
 {                                                                              \
     *pDst ^= src;                                                              \
@@ -466,6 +481,10 @@ inline int in_stack(const void* ptr)
 	clear_flags(EFLAGS_OF | EFLAGS_CF);                                        \
 }
 
+/**
+ * tmp <- dst - src
+ * EFLAGS affected: CF, OF, SF, ZF, AF, PF
+ */
 #define CMP(T, dst, src)                                                       \
 {                                                                              \
 	if ((u##T) dst < (u##T) src)                                               \
@@ -478,11 +497,19 @@ inline int in_stack(const void* ptr)
 		_cmp_signed, dst, -1 * src);                                           \
 }
 
+/**
+ * dst <- src
+ * EFLAGS affected: none
+ */
 #define MOV(T, pDst, src)                                                      \
 {                                                                              \
     *pDst = src;                                                               \
 }
 
+/**
+ * tmp <- dst _bitwise_and_ src
+ * EFLAGS affected: SF, ZF, PF, CF, OF
+ */
 #define TEST(T, dst, src)                                                      \
 {                                                                              \
     u##T _temp = src & dst;                                                    \
@@ -490,6 +517,10 @@ inline int in_stack(const void* ptr)
     clear_flags(EFLAGS_CF | EFLAGS_OF);                                        \
 }
 
+/**
+ * dst <- dst _shift_arithmetic_right_  src
+ * EFLAGS affected: CF, OF
+ */
 #define SAR(T, pDst, src)                                                      \
 {                                                                              \
 	if (*pDst & (1 >> src))                                                    \
@@ -503,21 +534,50 @@ inline int in_stack(const void* ptr)
 	*pDst = *pDst >> src;                                                      \
 }
 
+/* Macros for addressing modes */
+
+/**
+ * \brief   Checks if the given pointer points to the emulated stack
+ * \param   ptr     [in] the pointer to check
+ * \return  1 if in the emulated stack, 0 if not
+ */
+inline int in_stack(const void* ptr)
+{
+    int64_t pos = BASE_ESP - (uint32_t) ptr;
+    return (pos >= 0 && pos <= EMU_ESP ? 1 : 0);
+}
+
+/**
+ * Dereferences a pointer.
+ * If the pointer is in the emulated stack, value is taken from stack,
+ * otherwise it is dereferenced from host memory and hopefully it does not
+ * crash the emulator~~
+ */
+#define DEREF(ptr) (in_stack(ptr) ? stack[BASE_ESP - (uint32_t) (ptr)] : *(ptr))
+
+/* Gb: byte-sized register */
 #define PTR_Gb  (gprbyte[ctx.eff_reg])
 #define VAL_Gb  DEREF(PTR_Gb)
 
+/* Eb: byte-sized effective address (register or memory) */
 #define PTR_Eb  ((int8_t*) ctx.ea)
 #define VAL_Eb  DEREF(PTR_Eb)
 
+/* Gv: dword-sized register */
 #define PTR_Gv  (&(gpr[ctx.eff_reg]))
 #define VAL_Gv  DEREF(PTR_Gv)
 
+/* Ev: dword-sized effective address (register or memory) */
 #define PTR_Ev  ((int32_t*) ctx.ea)
 #define VAL_Ev  DEREF(PTR_Ev)
 
+/* Ib: byte-sized immediate value */
 #define VAL_Ib  (ctx.immed)
+
+/* Iz: dword-sized immediate value */
 #define VAL_Iz  (ctx.immed_l)
 
+/* AL: the AL register (LSB of EAX) */
 #define PTR_AL  (gprbyte[AL])
 #define VAL_AL  DEREF(PTR_AL)
 
@@ -538,6 +598,18 @@ void emulate(unsigned char* pCode, size_t nCodeLen)
     init_registers();
     
     BEGIN_OPCODE_MAP
+    
+    /* Formats:
+     *
+     * MAP1(OPCODE, UNIQUE_NAME, ADDRESSING_MODE_FLAGS)
+     *  => Maps 1 opcode
+     *
+     * MAPR(OPCODE_START, OPCODE_END, UNIQUE_NAME, ADDRESSING_MODE_FLAGS)
+     *  => Maps a range of opcodes (inclusive of start and end)
+     *
+     * MAP1_EXT(OPCODE, EXTENSION, UNIQUE_NAME, ADDRESSING_MODE_FLAGS)
+     *  => Maps 1 opcode with extension
+     */
     
     MAP1(0x00,          add_Eb_Gb,  MODRM)
     MAP1(0x01,          add_Ev_Gv,  MODRM)
@@ -569,30 +641,34 @@ void emulate(unsigned char* pCode, size_t nCodeLen)
     MAP1(0x3b,          cmp_Gv_Ev,  MODRM)
     MAP1(0x3c,          cmp_AL_Ib,  SRC_IMM_BYTE)
     
-    MAPR(0x40, 0x47,    inc_gpr,    DST_REG)
-    MAPR(0x48, 0x4f,    dec_gpr,    0)
+    MAPR(0x40, 0x47,    inc_gpr,    REG_ALT_ENC)
+    MAPR(0x48, 0x4f,    dec_gpr,    REG_ALT_ENC)
     
-    MAPR(0x50, 0x57,    push_gpr,   0)
-    MAPR(0x58, 0x5f,    pop_gpr,    DST_REG)
+    MAPR(0x50, 0x57,    push_gpr,   REG_ALT_ENC)
+    MAPR(0x58, 0x5f,    pop_gpr,    REG_ALT_ENC)
     
-    MAP1_EXT(0x80, 0x7, cmp_Eb_Ib,  DST_REG | SRC_IMM_BYTE | MODRM)
+    MAP1_EXT(0x80, 0x7, cmp_Eb_Ib,  SRC_IMM_BYTE | MODRM)
     
-    MAP1_EXT(0x81, 0x0, add_Ev_Iz,  DST_REG | SRC_IMM_LONG | EXTENSION | MODRM)
+    MAP1_EXT(0x81, 0x0, add_Ev_Iz,  SRC_IMM_LONG | EXTENSION | MODRM)
     
-    MAP1_EXT(0x83, 0x4, and_Ev_Ib,  SRC_IMM_BYTE | DST_REG | EXTENSION | MODRM)
-    MAP1_EXT(0x83, 0x5, sub_Ev_Ib,  SRC_IMM_BYTE | DST_REG | EXTENSION | MODRM)
+    MAP1_EXT(0x83, 0x4, and_Ev_Ib,  SRC_IMM_BYTE | EXTENSION | MODRM)
+    MAP1_EXT(0x83, 0x5, sub_Ev_Ib,  SRC_IMM_BYTE | EXTENSION | MODRM)
     
     MAP1(0x84,          test_Eb_Gb, MODRM)
     MAP1(0x85,          test_Ev_Gv, MODRM)
     
     MAP1(0x89,          mov_Ev_Gv,  MODRM)
-    MAP1(0x8b,          mov_Gv_Ev,  DST_REG | MODRM)
+    MAP1(0x8b,          mov_Gv_Ev,  MODRM)
     
-    MAP1(0x8d,          lea_Gv_m,   DST_REG | MODRM)
+    MAP1(0x8d,          lea_Gv_m,   MODRM)
     
-    MAP1_EXT(0xc1, 0x7, sar_Ev_Ib,  SRC_IMM_BYTE | DST_REG | EXTENSION | MODRM)
+    MAP1_EXT(0xc1, 0x7, sar_Ev_Ib,  SRC_IMM_BYTE | EXTENSION | MODRM)
     
     END_OPCODE_MAP
+    
+    /* Format: INSTR(UNIQUE_NAME) { __any_code__ }
+     * UNIQUE_NAME must match the opcode map
+     */
     
     INSTR(add_Eb_Gb)  { ADD(int8_t,  PTR_Eb,  VAL_Gb); }
     INSTR(add_Ev_Gv)  { ADD(int32_t, PTR_Ev,  VAL_Gv); }
@@ -624,11 +700,11 @@ void emulate(unsigned char* pCode, size_t nCodeLen)
     INSTR(cmp_Gv_Ev)  { CMP(int32_t, VAL_Gv,  VAL_Ev); }
     INSTR(cmp_AL_Ib)  { CMP(int8_t,  VAL_AL,  VAL_Ib); }
 
-	INSTR(inc_gpr)    { inc(&gpr[ctx.opcode - 0x40]);  }
-	INSTR(dec_gpr)    { dec(&gpr[ctx.opcode - 0x48]);  }
+	INSTR(inc_gpr)    { inc(PTR_Gv);  }
+	INSTR(dec_gpr)    { dec(PTR_Gv);  }
 
-	INSTR(push_gpr)   { push(&gpr[ctx.opcode - 0x50]); }
-	INSTR(pop_gpr)    { pop (&gpr[ctx.opcode - 0x58]); }
+	INSTR(push_gpr)   { push(PTR_Gv); }
+	INSTR(pop_gpr)    { pop (PTR_Gv); }
 
 	INSTR(cmp_Eb_Ib)  { CMP(int8_t,  VAL_Eb,  VAL_Ib); }
 	
@@ -645,11 +721,11 @@ void emulate(unsigned char* pCode, size_t nCodeLen)
 	
 	INSTR(mov_Gv_Ev)  { MOV(int32_t, PTR_Gv,  VAL_Ev); }
 
-	INSTR(lea_Gv_m)   { *PTR_Gv = ctx.ea;              }
+	INSTR(lea_Gv_m)   { *PTR_Gv = (int32_t) PTR_Ev;    }
 
 	INSTR(sar_Ev_Ib)  { SAR(int32_t, PTR_Ev,  VAL_Ib); }
 		
-	ON_CANNOT_EMULATE
+	ON_CANNOT_EMULATE /* Opcodes that are not implemented goes here */
 	{
 		printf("--- EMULATION FAILED [0x%02x]\n", pCode[EMU_EIP]);
 	}

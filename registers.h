@@ -10,6 +10,7 @@
 
 #include <stdint.h>
 
+/* General Purpose Registers */
 #define EAX         0
 #define ECX         1
 #define EDX         2
@@ -31,6 +32,7 @@ uint32_t eip;
 
 uint32_t eflags;
 
+/* Segment registers (not implemented) */
 uint32_t cs;
 uint32_t ss;
 uint32_t ds;
@@ -38,11 +40,7 @@ uint32_t es;
 uint32_t fs;
 uint32_t gs;
 
-/* Mask for < 32-bit registers */
-#define REG_L           0x000000ff      //e.g. AL
-#define REG_H           0x0000ff00      //e.g. AH
-#define REG_X           0x0000ffff      //e.g. AX   
-
+/* Index of 8-bit registers */
 #define AL              0
 #define CL              1
 #define DL              2
@@ -52,6 +50,7 @@ uint32_t gs;
 #define DH              6
 #define BH              7
 
+/* These macros are used to get pointers to 8-bit registers */
 #define LO_OF(reg)      ((uint8_t*) &(gpr[reg])) + 0
 #define HI_OF(reg)      ((uint8_t*) &(gpr[reg])) + 1
 
