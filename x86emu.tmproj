@@ -26,9 +26,23 @@
 			<key>caret</key>
 			<dict>
 				<key>column</key>
-				<integer>41</integer>
+				<integer>44</integer>
 				<key>line</key>
-				<integer>20</integer>
+				<integer>2</integer>
+			</dict>
+			<key>firstVisibleColumn</key>
+			<integer>0</integer>
+			<key>firstVisibleLine</key>
+			<integer>0</integer>
+		</dict>
+		<key>threaded_dispatch.h</key>
+		<dict>
+			<key>caret</key>
+			<dict>
+				<key>column</key>
+				<integer>39</integer>
+				<key>line</key>
+				<integer>46</integer>
 			</dict>
 			<key>firstVisibleColumn</key>
 			<integer>0</integer>
@@ -40,24 +54,25 @@
 			<key>caret</key>
 			<dict>
 				<key>column</key>
-				<integer>21</integer>
+				<integer>4</integer>
 				<key>line</key>
-				<integer>261</integer>
+				<integer>196</integer>
 			</dict>
 			<key>firstVisibleColumn</key>
 			<integer>0</integer>
 			<key>firstVisibleLine</key>
-			<integer>241</integer>
+			<integer>290</integer>
 		</dict>
 	</dict>
 	<key>openDocuments</key>
 	<array>
 		<string>x86emu.c</string>
+		<string>threaded_dispatch.h</string>
 		<string>registers.h</string>
 	</array>
 	<key>showFileHierarchyDrawer</key>
 	<true/>
 	<key>windowFrame</key>
-	<string>{{311, 109}, {701, 1279}}</string>
+	<string>{{1587, 76}, {905, 1342}}</string>
 </dict>
 </plist>

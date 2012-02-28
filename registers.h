@@ -20,6 +20,7 @@
 #define EDI         7
 
 uint32_t gpr[8]   = {0};
+uint8_t* gprbyte[8] = {0};
 
 #define BASE_EIP    0x8048354
 uint32_t eip;
@@ -41,6 +42,18 @@ uint32_t gs;
 #define REG_L           0x000000ff      //e.g. AL
 #define REG_H           0x0000ff00      //e.g. AH
 #define REG_X           0x0000ffff      //e.g. AX   
+
+#define AL              0
+#define CL              1
+#define DL              2
+#define BL              3
+#define AH              4
+#define CH              5
+#define DH              6
+#define BH              7
+
+#define LO_OF(reg)      ((uint8_t*) &(gpr[reg])) + 0
+#define HI_OF(reg)      ((uint8_t*) &(gpr[reg])) + 1
 
 /* Some EFLAGS masks */
 #define EFLAGS_CF       (1<<0)
