@@ -21,8 +21,8 @@
 /* Flags to indicate addressing modes */
 #define SRC_IMM_BYTE    (1<<0)  /* Immediate 8-bit operand */
 #define DST_REG         (1<<1)	/* The destination operand is a GPR */
-#define EXTENSION       (1<<2)	/* REG in MOD_REG_RM refers to opcode extension */
-#define MODRM           (1<<3)	/* There is a MOD_REG_RM byte following opcode */
+#define EXTENSION       (1<<2)	/* REG in MOD_REG_RM refers to opcode ext */
+#define MODRM           (1<<3)	/* There is a MOD_REG_RM byte */
 #define SRC_IMM_LONG    (1<<4)  /* Immediate double word operand */
 
 /* Addressing mode description for instructions with one-byte opcode */
@@ -40,12 +40,13 @@ typedef struct
 {
     uint8_t     opcode;		/* 1-byte opcode */
     int32_t*    pDst;		/* pointer to 32-bit destination */
-    unsigned long    ea;	        /* effective address from MOD_REG_RM byte */
+    unsigned long    ea;	/* effective address from MOD_REG_RM byte */
     uint8_t     mod;		/* MOD part of the MOD_REG_RM byte */
     uint8_t     reg;		/* REG part of the MOD_REG_RM byte */
     uint8_t     rm;			/* RM part of the MOD_REG_RM byte */
     int8_t      immed;		/* 1-byte immediate operand */
     int32_t     immed_l;    /* double word immediate operand */
+    uint8_t     eff_reg;    /* register index that will be used */
 } context_s;
 
 #define PRINTREG(name, val) printf("%s\t0x%x\n", name, val)
@@ -83,7 +84,10 @@ inline void print_stack()
     printf("STACK\n");
     uint32_t i = 0;
     for (i = 0; i <= EMU_ESP; ++i)
-        printf("0x%08x:\t0x%02x %s\n", (BASE_ESP-i), stack[i], (i==EMU_ESP?"<- esp":""));
+    {
+        printf("0x%08x:\t0x%02x %s\n",
+            (BASE_ESP-i), stack[i], (i==EMU_ESP?"<- esp":""));
+    }
     printf("\n");
 }
 
@@ -264,6 +268,7 @@ inline size_t decode_instr(unsigned char* pCode, context_s* pCtx)
     if (AM(MODRM))
     {
         pos += decode_regrm(pCode + pos, pCtx);
+        pCtx->eff_reg = pCtx->reg;
     }
     
     if (AM(SRC_IMM_BYTE))
@@ -281,9 +286,15 @@ inline size_t decode_instr(unsigned char* pCode, context_s* pCtx)
     if (AM(DST_REG))
     {
         if (AM(EXTENSION))
+        {
             pCtx->pDst = &(gpr[pCtx->rm]);
+            pCtx->eff_reg = pCtx->rm;
+        }
         else
+        {
             pCtx->pDst = &(gpr[pCtx->reg]);
+            pCtx->eff_reg = pCtx->reg;
+        }
     }
     
     return pos;
@@ -311,7 +322,7 @@ inline void clear_flags(uint32_t mask)
 #define IS_NEGATIVE(x) ((x) & 0x80000000)
 
 /**
- * \brief   Modifies the required flags based on the result of previous operation.
+ * \brief   Modifies the required flags based on the result of last operation.
  *          For OF, the operation is assumed to be ADD,
  *              if it is SUB then the given operand must be negated.
  *          Operands are only required if OF is chosen. Otherwise, may set to 0.
@@ -320,12 +331,12 @@ inline void clear_flags(uint32_t mask)
  * \param   op1     [in]  first operand of the last operation
  * \param   op2     [in]  second operand of the last operation
  */
-inline void modify_flags(uint32_t mask, int32_t result, int32_t op1, int32_t op2)
+inline void modify_flags(uint32_t mask, int32_t res, int32_t op1, int32_t op2)
 {
-    /* Parity Flag: Set iff the no of set bits in the least significant byte is even. */
+    /* Parity Flag: Set iff the no of set bits in LSB is even. */
     if (mask & EFLAGS_PF)
     {
-        if (__builtin_popcount(result & 0x000000ff) % 2)
+        if (__builtin_popcount(res & 0x000000ff) % 2)
             clear_flags(EFLAGS_PF);
         else
             set_flags(EFLAGS_PF);
@@ -334,7 +345,7 @@ inline void modify_flags(uint32_t mask, int32_t result, int32_t op1, int32_t op2
     /* Zero Flag: set iff zero. */
     if (mask & EFLAGS_ZF)
     {
-        if (result)
+        if (res)
             clear_flags(EFLAGS_ZF);
         else
             set_flags(EFLAGS_ZF);
@@ -343,7 +354,7 @@ inline void modify_flags(uint32_t mask, int32_t result, int32_t op1, int32_t op2
     /* Sign Flag: set iff most significant bit is set. */
     if (mask & EFLAGS_SF)
     {
-        if (IS_NEGATIVE(result))
+        if (IS_NEGATIVE(res))
             set_flags(EFLAGS_SF);
         else
             clear_flags(EFLAGS_SF);
@@ -353,8 +364,8 @@ inline void modify_flags(uint32_t mask, int32_t result, int32_t op1, int32_t op2
                       sign of the result is the inverse. */
     if (mask & EFLAGS_OF)
     {
-        if ( (IS_NEGATIVE(op1) && IS_NEGATIVE(op2) && !IS_NEGATIVE(result)) ||
-             (!IS_NEGATIVE(op1) && !IS_NEGATIVE(op2) && IS_NEGATIVE(result)) )
+        if ( (IS_NEGATIVE(op1) && IS_NEGATIVE(op2) && !IS_NEGATIVE(res)) ||
+             (!IS_NEGATIVE(op1) && !IS_NEGATIVE(op2) && IS_NEGATIVE(res)) )
             set_flags(EFLAGS_OF);
         else
             clear_flags(EFLAGS_OF);
@@ -378,7 +389,7 @@ inline void pop(uint32_t* pReg)
 
 /**
  * \brief  Pushes 32-bit value from the top of the stack and winds the stack
- * \param  pReg     [in]  pointer to memory location to get the value to be pushed
+ * \param  pReg     [in]  pointer to memory location of the value to be pushed
  */
 inline void push(const uint32_t* pReg)
 {
@@ -389,22 +400,126 @@ inline void push(const uint32_t* pReg)
     gpr[ESP] -= 4;
 }
 
-inline void and8(int8_t src, int8_t* pDst)
+inline void inc(uint32_t* pReg)
 {
-    *pDst &= src;
-	modify_flags(EFLAGS_PF | EFLAGS_ZF | EFLAGS_SF, *pDst, 0, 0);
-	clear_flags(EFLAGS_OF | EFLAGS_CF);
+	uint32_t prev_val = *pReg;
+	++(*pReg);
+	modify_flags(EFLAGS_OF | EFLAGS_SF | EFLAGS_ZF | EFLAGS_AF | EFLAGS_PF,
+		*pReg, prev_val, 1);
 }
 
-inline void and32(int32_t src, int32_t* pDst)
+inline void dec(uint32_t* pReg)
 {
-	*pDst &= src;
-	modify_flags(EFLAGS_PF | EFLAGS_ZF | EFLAGS_SF, *pDst, 0, 0);
-	clear_flags(EFLAGS_OF | EFLAGS_CF);
+	uint32_t prev_val = *pReg;
+	--(*pReg);
+	modify_flags(EFLAGS_OF | EFLAGS_SF | EFLAGS_ZF | EFLAGS_AF | EFLAGS_PF,
+		*pReg, prev_val, -1);
 }
 
-/* Checks the w bit in the opcode */
-#define LONG_SIZED (ctx.opcode & 0x1)
+inline int in_stack(const void* ptr)
+{
+    int64_t pos = BASE_ESP - (uint32_t) ptr;
+    return (pos >= 0 && pos <= EMU_ESP ? 1 : 0);
+}
+
+#define DEREF(ptr) (in_stack(ptr) ? stack[BASE_ESP - (uint32_t) (ptr)] : *(ptr))
+
+#define ADD(T, pDst, src)                                                      \
+{	                                                                           \
+    u##T result_u = (u##T) *pDst + (u##T) src;                                 \
+    if (result_u < (u##T) *pDst || result_u < (u##T) src)                      \
+        set_flags(EFLAGS_CF);                                                  \
+    else                                                                       \
+        clear_flags(EFLAGS_CF);                                                \
+                                                                               \
+    T prev_dst = *pDst;                                                        \
+    *pDst += src;                                                              \
+    modify_flags(EFLAGS_OF | EFLAGS_SF | EFLAGS_ZF | EFLAGS_AF | EFLAGS_PF,    \
+	    *pDst, prev_dst, src);                                                 \
+}
+
+#define AND(T, pDst, src)                                                      \
+{                                                                              \
+    *pDst &= src;                                                              \
+	modify_flags(EFLAGS_PF | EFLAGS_ZF | EFLAGS_SF, *pDst, 0, 0);              \
+	clear_flags(EFLAGS_OF | EFLAGS_CF);                                        \
+}
+
+#define SUB(T, pDst, src)                                                      \
+{                                                                              \
+    if ((u##T) *pDst < (u##T) src)                                             \
+	    set_flags(EFLAGS_CF);                                                  \
+    else                                                                       \
+	    clear_flags(EFLAGS_CF);                                                \
+                                                                               \
+    T prev_dst = *pDst;                                                        \
+    *pDst -= src;                                                              \
+                                                                               \
+    modify_flags(EFLAGS_OF | EFLAGS_SF | EFLAGS_ZF | EFLAGS_AF | EFLAGS_PF,    \
+	    *pDst, prev_dst, -1 * src);                                            \
+}
+
+#define XOR(T, pDst, src)                                                      \
+{                                                                              \
+    *pDst ^= src;                                                              \
+	modify_flags(EFLAGS_PF | EFLAGS_ZF | EFLAGS_SF, *pDst, 0, 0);              \
+	clear_flags(EFLAGS_OF | EFLAGS_CF);                                        \
+}
+
+#define CMP(T, dst, src)                                                       \
+{                                                                              \
+	if ((u##T) dst < (u##T) src)                                               \
+		set_flags(EFLAGS_CF);                                                  \
+	else                                                                       \
+		clear_flags(EFLAGS_CF);                                                \
+	                                                                           \
+	T _cmp_signed = (T) dst - (T) src;                                         \
+	modify_flags(EFLAGS_OF | EFLAGS_SF | EFLAGS_ZF | EFLAGS_AF | EFLAGS_PF,    \
+		_cmp_signed, dst, -1 * src);                                           \
+}
+
+#define MOV(T, pDst, src)                                                      \
+{                                                                              \
+    *pDst = src;                                                               \
+}
+
+#define TEST(T, dst, src)                                                      \
+{                                                                              \
+    u##T _temp = src & dst;                                                    \
+    modify_flags(EFLAGS_SF | EFLAGS_ZF | EFLAGS_PF, _temp, dst, src);          \
+    clear_flags(EFLAGS_CF | EFLAGS_OF);                                        \
+}
+
+#define SAR(T, pDst, src)                                                      \
+{                                                                              \
+	if (*pDst & (1 >> src))                                                    \
+		set_flags(EFLAGS_CF);                                                  \
+	else                                                                       \
+		clear_flags(EFLAGS_CF);                                                \
+		                                                                       \
+	if (src == 1)                                                              \
+		clear_flags(EFLAGS_OF);                                                \
+	                                                                           \
+	*pDst = *pDst >> src;                                                      \
+}
+
+#define PTR_Gb  (gprbyte[ctx.eff_reg])
+#define VAL_Gb  DEREF(PTR_Gb)
+
+#define PTR_Eb  ((int8_t*) ctx.ea)
+#define VAL_Eb  DEREF(PTR_Eb)
+
+#define PTR_Gv  (&(gpr[ctx.eff_reg]))
+#define VAL_Gv  DEREF(PTR_Gv)
+
+#define PTR_Ev  ((int32_t*) ctx.ea)
+#define VAL_Ev  DEREF(PTR_Ev)
+
+#define VAL_Ib  (ctx.immed)
+#define VAL_Iz  (ctx.immed_l)
+
+#define PTR_AL  (gprbyte[AL])
+#define VAL_AL  DEREF(PTR_AL)
 
 /**
  * \brief   Emulates n bytes of the code
@@ -423,203 +538,126 @@ void emulate(unsigned char* pCode, size_t nCodeLen)
     init_registers();
     
     BEGIN_OPCODE_MAP
+    
+    MAP1(0x00,          add_Eb_Gb,  MODRM)
+    MAP1(0x01,          add_Ev_Gv,  MODRM)
+    MAP1(0x02,          add_Gb_Eb,  MODRM)
+    MAP1(0x03,          add_Gv_Ev,  MODRM)
+    MAP1(0x04,          add_AL_Ib,  SRC_IMM_BYTE)
+    
     MAP1(0x20,          and_Eb_Gb,  MODRM)
     MAP1(0x21,          and_Ev_Gv,  MODRM)
     MAP1(0x22,          and_Gb_Eb,  MODRM)
     MAP1(0x23,          and_Gv_Ev,  MODRM)
     MAP1(0x24,          and_AL_Ib,  SRC_IMM_BYTE)
+    
+    MAP1(0x28,          sub_Eb_Gb,  MODRM)
+    MAP1(0x29,          sub_Ev_Gv,  MODRM)
+    MAP1(0x2a,          sub_Gb_Eb,  MODRM)
+    MAP1(0x2b,          sub_Gv_Ev,  MODRM)
+    MAP1(0x2c,          sub_AL_Ib,  SRC_IMM_BYTE)
+    
+    MAP1(0x30,          xor_Eb_Gb,  MODRM)
+    MAP1(0x31,          xor_Ev_Gv,  MODRM)
+    MAP1(0x32,          xor_Gb_Eb,  MODRM)
+    MAP1(0x33,          xor_Gv_Ev,  MODRM)
     MAP1(0x34,          xor_AL_Ib,  SRC_IMM_BYTE)
+    
+    MAP1(0x38,          cmp_Eb_Gb,  MODRM)
+    MAP1(0x39,          cmp_Ev_Gv,  MODRM)
+    MAP1(0x3a,          cmp_Gb_Eb,  MODRM)
+    MAP1(0x3b,          cmp_Gv_Ev,  MODRM)
+    MAP1(0x3c,          cmp_AL_Ib,  SRC_IMM_BYTE)
+    
     MAPR(0x40, 0x47,    inc_gpr,    DST_REG)
     MAPR(0x48, 0x4f,    dec_gpr,    0)
+    
     MAPR(0x50, 0x57,    push_gpr,   0)
     MAPR(0x58, 0x5f,    pop_gpr,    DST_REG)
+    
     MAP1_EXT(0x80, 0x7, cmp_Eb_Ib,  DST_REG | SRC_IMM_BYTE | MODRM)
+    
     MAP1_EXT(0x81, 0x0, add_Ev_Iz,  DST_REG | SRC_IMM_LONG | EXTENSION | MODRM)
+    
     MAP1_EXT(0x83, 0x4, and_Ev_Ib,  SRC_IMM_BYTE | DST_REG | EXTENSION | MODRM)
     MAP1_EXT(0x83, 0x5, sub_Ev_Ib,  SRC_IMM_BYTE | DST_REG | EXTENSION | MODRM)
-    MAP1(0x84,          test_E_G,   MODRM)
-    MAP1(0x85,          test_E_G,   MODRM)
+    
+    MAP1(0x84,          test_Eb_Gb, MODRM)
+    MAP1(0x85,          test_Ev_Gv, MODRM)
+    
     MAP1(0x89,          mov_Ev_Gv,  MODRM)
     MAP1(0x8b,          mov_Gv_Ev,  DST_REG | MODRM)
+    
     MAP1(0x8d,          lea_Gv_m,   DST_REG | MODRM)
+    
     MAP1_EXT(0xc1, 0x7, sar_Ev_Ib,  SRC_IMM_BYTE | DST_REG | EXTENSION | MODRM)
+    
     END_OPCODE_MAP
     
-    INSTR(and_Eb_Gb)
-    {
-        and8(*(gprbyte[ctx.reg]), (int8_t*) ctx.ea);
-    };
+    INSTR(add_Eb_Gb)  { ADD(int8_t,  PTR_Eb,  VAL_Gb); }
+    INSTR(add_Ev_Gv)  { ADD(int32_t, PTR_Ev,  VAL_Gv); }
+    INSTR(add_Gb_Eb)  { ADD(int8_t,  PTR_Gb,  VAL_Eb); }
+    INSTR(add_Gv_Ev)  { ADD(int32_t, PTR_Gv,  VAL_Ev); }
+    INSTR(add_AL_Ib)  { ADD(int8_t,  PTR_AL,  VAL_Ib); }
     
-    INSTR(and_Ev_Gv)
-    {
-        and32(gpr[ctx.reg], (int32_t*) ctx.ea);
-    };
+    INSTR(and_Eb_Gb)  { AND(int8_t,  PTR_Eb,  VAL_Gb); }
+    INSTR(and_Ev_Gv)  { AND(int32_t, PTR_Ev,  VAL_Gv); }
+    INSTR(and_Gb_Eb)  { AND(int8_t,  PTR_Gb,  VAL_Eb); }
+    INSTR(and_Gv_Ev)  { AND(int32_t, PTR_Gv,  VAL_Ev); }
+    INSTR(and_AL_Ib)  { AND(int8_t,  PTR_AL,  VAL_Ib); }
     
-    INSTR(and_Gb_Eb)
-    {
-        and8(*((int8_t*) ctx.ea), gprbyte[ctx.reg]);
-    };
+    INSTR(sub_Eb_Gb)  { SUB(int8_t,  PTR_Eb,  VAL_Gb); }
+    INSTR(sub_Ev_Gv)  { SUB(int32_t, PTR_Ev,  VAL_Gv); }
+    INSTR(sub_Gb_Eb)  { SUB(int8_t,  PTR_Gb,  VAL_Eb); }
+    INSTR(sub_Gv_Ev)  { SUB(int32_t, PTR_Gv,  VAL_Ev); }
+    INSTR(sub_AL_Ib)  { SUB(int8_t,  PTR_AL,  VAL_Ib); }
     
-    INSTR(and_Gv_Ev)
-    {
-        and32(*((int32_t*) ctx.ea), &(gpr[ctx.reg]));
-    };
+    INSTR(xor_Eb_Gb)  { XOR(int8_t,  PTR_Eb,  VAL_Gb); }
+    INSTR(xor_Ev_Gv)  { XOR(int32_t, PTR_Ev,  VAL_Gv); }
+    INSTR(xor_Gb_Eb)  { XOR(int8_t,  PTR_Gb,  VAL_Eb); }
+    INSTR(xor_Gv_Ev)  { XOR(int32_t, PTR_Gv,  VAL_Ev); }
+    INSTR(xor_AL_Ib)  { XOR(int8_t,  PTR_AL,  VAL_Ib); }
     
-    INSTR(and_AL_Ib)
-    {
-        and8(ctx.immed, gprbyte[AL]);
-    };
-    
-	INSTR(xor_AL_Ib)
-	{
-		gpr[EAX] ^= (ctx.immed & REG_L);
-		
-		modify_flags(EFLAGS_PF | EFLAGS_ZF | EFLAGS_SF, gpr[EAX] & REG_L, 0, 0); //operands not required
-		clear_flags(EFLAGS_OF | EFLAGS_CF);
-	};
+    INSTR(cmp_Eb_Gb)  { CMP(int8_t,  VAL_Eb,  VAL_Gb); }
+    INSTR(cmp_Ev_Gv)  { CMP(int32_t, VAL_Ev,  VAL_Gv); }
+    INSTR(cmp_Gb_Eb)  { CMP(int8_t,  VAL_Gb,  VAL_Eb); }
+    INSTR(cmp_Gv_Ev)  { CMP(int32_t, VAL_Gv,  VAL_Ev); }
+    INSTR(cmp_AL_Ib)  { CMP(int8_t,  VAL_AL,  VAL_Ib); }
 
-	INSTR(inc_gpr)
-	{
-		tmp_l = gpr[ctx.opcode - 0x40];
-		++(gpr[ctx.opcode - 0x40]);
-		modify_flags(EFLAGS_OF | EFLAGS_SF | EFLAGS_ZF | EFLAGS_AF | EFLAGS_PF,
-			gpr[ctx.opcode - 0x40], tmp_l, 1);
-	};
-		
-	INSTR(dec_gpr)
-	{
-		tmp_l = gpr[ctx.opcode - 0x48];
-		--(gpr[ctx.opcode - 0x48]);
-		modify_flags(EFLAGS_OF | EFLAGS_SF | EFLAGS_ZF | EFLAGS_AF | EFLAGS_PF,
-			gpr[ctx.opcode - 0x40], tmp_l, -1);
-	};
+	INSTR(inc_gpr)    { inc(&gpr[ctx.opcode - 0x40]);  }
+	INSTR(dec_gpr)    { dec(&gpr[ctx.opcode - 0x48]);  }
 
-	INSTR(push_gpr)
-	{
-		push(&gpr[ctx.opcode - 0x50]);
-	};
+	INSTR(push_gpr)   { push(&gpr[ctx.opcode - 0x50]); }
+	INSTR(pop_gpr)    { pop (&gpr[ctx.opcode - 0x58]); }
 
-	INSTR(pop_gpr)
-	{
-		pop(&gpr[ctx.opcode - 0x58]);
-	};
-
-	INSTR(cmp_Eb_Ib)
-	{
-	    /* CMP works by performing subtraction as in SUB,
-		   and sets flags the same way */
-		int8_t src_op = stack[BASE_ESP - ctx.ea];
-		
-		if ((uint8_t) src_op < (uint8_t) ctx.immed)
-			set_flags(EFLAGS_CF);
-		else
-			clear_flags(EFLAGS_CF);
-		   
-		tmp_b = (int8_t) src_op - (int8_t) ctx.immed;
-		modify_flags(EFLAGS_OF | EFLAGS_SF | EFLAGS_ZF | EFLAGS_AF | EFLAGS_PF,
-			tmp_b, src_op, -1 * ctx.immed);
-	};
+	INSTR(cmp_Eb_Ib)  { CMP(int8_t,  VAL_Eb,  VAL_Ib); }
 	
-	INSTR(add_Ev_Iz)
-	{
-	    uint32_t result_unsigned = (uint32_t) *(ctx.pDst) + (uint32_t) ctx.immed_l;
-        if (result_unsigned < (uint32_t) *(ctx.pDst) || result_unsigned < (uint32_t) ctx.immed_l)
-            set_flags(EFLAGS_CF);
-        else
-            clear_flags(EFLAGS_CF);
-        
-        tmp_l = *(ctx.pDst);
-        *(ctx.pDst) += ctx.immed_l;
-		modify_flags(EFLAGS_OF | EFLAGS_SF | EFLAGS_ZF | EFLAGS_AF | EFLAGS_PF,
-			*(ctx.pDst), tmp_l, ctx.immed_l);
-    };
+	INSTR(add_Ev_Iz)  { ADD(int32_t, PTR_Ev,  VAL_Iz); }
 
-	INSTR(and_Ev_Ib)
-	{
-        and32(ctx.immed, (uint32_t*) ctx.pDst);
-	};
+	INSTR(and_Ev_Ib)  { AND(int32_t, PTR_Ev,  VAL_Ib); }
 			
-	INSTR(sub_Ev_Ib)
-	{
-		/* SUB evaluates the operands as both signed and unsigned,
-		   set CF according to unsigned, the rest according to signed. */
-		
-		if ((uint32_t) *(ctx.pDst) < (uint32_t) ctx.immed)
-			set_flags(EFLAGS_CF);
-		else
-			clear_flags(EFLAGS_CF);
-		
-		/* now treat operands as signed */
-		tmp_l = *(ctx.pDst);
-		*(ctx.pDst) -= ctx.immed;
-		
-		modify_flags(EFLAGS_OF | EFLAGS_SF | EFLAGS_ZF | EFLAGS_AF | EFLAGS_PF,
-			*(ctx.pDst), tmp_l, -1 * ctx.immed);
-	};
+	INSTR(sub_Ev_Ib)  { SUB(int32_t, PTR_Ev,  VAL_Ib); }
 	
-	INSTR(test_E_G)
-	{
-        uint32_t temp, src1, src2;
-        
-	    if (LONG_SIZED)
-	    {
-            src1 = gpr[ctx.reg];
-            src2 = gpr[ctx.rm];
-	    }
-	    else
-	    {
-	        src1 = *(gprbyte[ctx.reg]);
-            src2 = *(gprbyte[ctx.rm]);
-	    }
-	    
-        temp = src1 & src2;
-        modify_flags(EFLAGS_SF | EFLAGS_ZF | EFLAGS_PF, temp, src1, src2);
-        clear_flags(EFLAGS_CF | EFLAGS_OF);
-    };
+	INSTR(test_Eb_Gb) { TEST(int8_t,  VAL_Eb, VAL_Gb); }
+	INSTR(test_Ev_Gv) { TEST(int32_t, VAL_Ev, VAL_Gv); }
 
-	INSTR(mov_Ev_Gv)
-	{
-		if (ctx.mod == 0x3)
-			gpr[ctx.rm] = gpr[ctx.reg];
-	};
+	INSTR(mov_Ev_Gv)  { MOV(int32_t, PTR_Ev,  VAL_Gv); }
 	
-	INSTR(mov_Gv_Ev)
-	{
-        gpr[ctx.reg] = stack[BASE_ESP - ctx.ea];
-    };
+	INSTR(mov_Gv_Ev)  { MOV(int32_t, PTR_Gv,  VAL_Ev); }
 
-	INSTR(lea_Gv_m)
-	{
-		*(ctx.pDst) = ctx.ea;
-	};
+	INSTR(lea_Gv_m)   { *PTR_Gv = ctx.ea;              }
 
-	INSTR(sar_Ev_Ib)
-	{
-		/* On SAR, CF contains the last bit shifted out */
-		if ((int32_t) *(ctx.pDst) & (1 >> ctx.immed))
-			set_flags(EFLAGS_CF);
-		else
-			clear_flags(EFLAGS_CF);
-			
-		/* OF is only affected for 1-bit shifts */
-		if (ctx.immed == 1)
-		{
-			/* For SAR, OF is cleared for 1-bit shifts */
-			clear_flags(EFLAGS_OF);
-		}
-		
-		*(ctx.pDst) = (int32_t) *(ctx.pDst) >> ctx.immed;
-	};
+	INSTR(sar_Ev_Ib)  { SAR(int32_t, PTR_Ev,  VAL_Ib); }
 		
 	ON_CANNOT_EMULATE
 	{
-		printf("EMULATION FAILED [0x%02x]\n", pCode[EMU_EIP]);
-	};
+		printf("--- EMULATION FAILED [0x%02x]\n", pCode[EMU_EIP]);
+	}
 		
 	ON_HALT
 	{
-		printf("--- The emulator is going to halt.\n");
-	};
+		printf("--- HALT\n");
+	}
 }
 
 /* Point of entry of the application */
