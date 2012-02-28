@@ -6,6 +6,7 @@ A partial x86 emulator for CS6270
 --------------------------------------------------------------------------------
 
 Edwin Boaz Soenaryo (edwinbs@comp.nus.edu.sg)
+A0082245
 
 Package contents:
 ------------------

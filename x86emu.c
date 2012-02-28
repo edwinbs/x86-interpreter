@@ -430,6 +430,7 @@ inline int in_stack(const void* ptr)
  * crash the emulator~~
  */
 #define DEREF(ptr) (in_stack(ptr) ? stack[BASE_ESP - (uint32_t) (ptr)] : *(ptr))
+#define TRANSLATE(T, ptr) (in_stack(ptr) ? (T*) &stack[BASE_ESP - (uint32_t) (ptr)] : (T*) ptr)
 
 /**
  * \brief  Pops 32-bit value from the top of the stack and unwinds the stack
@@ -489,16 +490,17 @@ inline void dec(uint32_t* pReg)
  */
 #define ADD(T, pDst, src)                                                      \
 {	                                                                           \
-    u##T result_u = (u##T) *pDst + (u##T) src;                                 \
-    if (result_u < (u##T) *pDst || result_u < (u##T) src)                      \
+    T* pEmuDst = (T*) TRANSLATE(T, pDst);                                      \
+    u##T result_u = (u##T) *pEmuDst + (u##T) src;                              \
+    if (result_u < (u##T) *pEmuDst || result_u < (u##T) src)                   \
         set_flags(EFLAGS_CF);                                                  \
     else                                                                       \
         clear_flags(EFLAGS_CF);                                                \
                                                                                \
-    T prev_dst = *pDst;                                                        \
-    *pDst += src;                                                              \
+    T prev_dst = *pEmuDst;                                                     \
+    *pEmuDst += src;                                                           \
     modify_flags(EFLAGS_OF | EFLAGS_SF | EFLAGS_ZF | EFLAGS_AF | EFLAGS_PF,    \
-	    *pDst, prev_dst, src);                                                 \
+	    *pEmuDst, prev_dst, src);                                              \
 }
 
 /**
@@ -507,8 +509,9 @@ inline void dec(uint32_t* pReg)
  */
 #define AND(T, pDst, src)                                                      \
 {                                                                              \
-    *pDst &= src;                                                              \
-	modify_flags(EFLAGS_PF | EFLAGS_ZF | EFLAGS_SF, *pDst, 0, 0);              \
+    T* pEmuDst = TRANSLATE(T, pDst);                                           \
+    *pEmuDst &= src;                                                           \
+	modify_flags(EFLAGS_PF | EFLAGS_ZF | EFLAGS_SF, *pEmuDst, 0, 0);           \
 	clear_flags(EFLAGS_OF | EFLAGS_CF);                                        \
 }
 
@@ -518,16 +521,17 @@ inline void dec(uint32_t* pReg)
  */
 #define SUB(T, pDst, src)                                                      \
 {                                                                              \
-    if ((u##T) *pDst < (u##T) src)                                             \
+    T* pEmuDst = TRANSLATE(T, pDst);                                           \
+    if ((u##T) *pEmuDst < (u##T) src)                                          \
 	    set_flags(EFLAGS_CF);                                                  \
     else                                                                       \
 	    clear_flags(EFLAGS_CF);                                                \
                                                                                \
-    T prev_dst = *pDst;                                                        \
+    T prev_dst = *pEmuDst;                                                     \
     *pDst -= src;                                                              \
                                                                                \
     modify_flags(EFLAGS_OF | EFLAGS_SF | EFLAGS_ZF | EFLAGS_AF | EFLAGS_PF,    \
-	    *pDst, prev_dst, -1 * src);                                            \
+	    *pEmuDst, prev_dst, -1 * src);                                         \
 }
 
 /**
@@ -536,8 +540,9 @@ inline void dec(uint32_t* pReg)
  */
 #define XOR(T, pDst, src)                                                      \
 {                                                                              \
+    T* pEmuDst = TRANSLATE(T, pDst);                                           \
     *pDst ^= src;                                                              \
-	modify_flags(EFLAGS_PF | EFLAGS_ZF | EFLAGS_SF, *pDst, 0, 0);              \
+	modify_flags(EFLAGS_PF | EFLAGS_ZF | EFLAGS_SF, *pEmuDst, 0, 0);           \
 	clear_flags(EFLAGS_OF | EFLAGS_CF);                                        \
 }
 
@@ -563,7 +568,8 @@ inline void dec(uint32_t* pReg)
  */
 #define MOV(T, pDst, src)                                                      \
 {                                                                              \
-    *pDst = src;                                                               \
+    T* pEmuDst = TRANSLATE(T, pDst);                                           \
+    *pEmuDst = src;                                                            \
 }
 
 /**
@@ -583,7 +589,8 @@ inline void dec(uint32_t* pReg)
  */
 #define SAR(T, pDst, src)                                                      \
 {                                                                              \
-	if (*pDst & (1 >> src))                                                    \
+    T* pEmuDst = TRANSLATE(T, pDst);                                           \
+	if (*pEmuDst & (1 >> src))                                                 \
 		set_flags(EFLAGS_CF);                                                  \
 	else                                                                       \
 		clear_flags(EFLAGS_CF);                                                \
@@ -591,7 +598,7 @@ inline void dec(uint32_t* pReg)
 	if (src == 1)                                                              \
 		clear_flags(EFLAGS_OF);                                                \
 	                                                                           \
-	*pDst = *pDst >> src;                                                      \
+	*pEmuDst = *pEmuDst >> src;                                                \
 }
 
 /* Macros for addressing modes */
@@ -785,7 +792,7 @@ void emulate(unsigned char* pCode, size_t nCodeLen)
 	
     INSTR(nop)        { }
 
-    INSTR(sar_Eb_Ib)  { SAR(int32_t, PTR_Eb,  VAL_Ib); }
+    INSTR(sar_Eb_Ib)  { SAR(int8_t,  PTR_Eb,  VAL_Ib); }
 	INSTR(sar_Ev_Ib)  { SAR(int32_t, PTR_Ev,  VAL_Ib); }
 	
 	INSTR(mov_Eb_Ib)  { MOV(int8_t,  PTR_Eb,  VAL_Ib); }
